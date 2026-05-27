@@ -4,11 +4,11 @@ Knowledge Graph Lattice — Startup Script
 Run this once before starting the backend server.
 
 What it does:
-  1. Checks required environment variables
-  2. Starts FalkorDB and PostgreSQL Docker containers (if not running)
-  3. Waits for both to be healthy
-  4. Seeds PostgreSQL with contract data (idempotent)
-  5. Initialises FalkorDB vector indexes
+  1. Starts FalkorDB, PostgreSQL, and MongoDB Docker containers (if not running)
+  2. Waits for all three to be healthy
+  3. Seeds PostgreSQL with structured contract data (idempotent)
+  4. Seeds MongoDB with unstructured legal documents (idempotent)
+  5. Initialises FalkorDB vector indexes and schema
   6. Prints a ready summary
 
 Usage:
@@ -40,6 +40,9 @@ PG_PORT         = int(os.getenv("POSTGRES_PORT", 5432))
 PG_DB           = os.getenv("POSTGRES_DB", "contracts")
 PG_USER         = os.getenv("POSTGRES_USER", "lattice")
 PG_PASS         = os.getenv("POSTGRES_PASSWORD", "lattice123")
+MONGO_HOST      = os.getenv("MONGO_HOST", "localhost")
+MONGO_PORT      = int(os.getenv("MONGO_PORT", 27017))
+MONGO_DB        = os.getenv("MONGO_DB", "contracts_docs")
 SEED_ON_STARTUP = os.getenv("SEED_ON_STARTUP", "true").lower() == "true"
 SCRIPT_DIR      = Path(__file__).parent / "scripts"
 
@@ -154,7 +157,84 @@ def ensure_postgres():
         err("PostgreSQL did not become ready in time")
         return False
 
-# ── step 2: seed PostgreSQL ───────────────────────────────────────────────────
+# ── step 2: MongoDB container ─────────────────────────────────────────────────
+
+def ensure_mongo():
+    banner("MongoDB")
+    if container_running("lattice-mongo"):
+        ok("Container already running")
+        return True
+
+    info("Starting mongo:7.0 container ...")
+    code, out = run(
+        "docker run -d --name lattice-mongo "
+        f"-p {MONGO_PORT}:27017 "
+        "mongo:7.0"
+    )
+    if code != 0:
+        code2, _ = run("docker start lattice-mongo")
+        if code2 != 0:
+            err(f"Failed to start MongoDB: {out}")
+            return False
+
+    def mongo_ready():
+        try:
+            import pymongo
+            client = pymongo.MongoClient(
+                host=MONGO_HOST, port=MONGO_PORT,
+                serverSelectionTimeoutMS=2000
+            )
+            client.server_info()
+            client.close()
+            return True
+        except Exception:
+            return False
+
+    if wait_for("MongoDB", mongo_ready, timeout=30):
+        ok(f"MongoDB ready at {MONGO_HOST}:{MONGO_PORT}/{MONGO_DB}")
+        return True
+    else:
+        err("MongoDB did not become ready in time")
+        return False
+
+
+# ── step 3: seed MongoDB ──────────────────────────────────────────────────────
+
+def seed_mongo():
+    banner("Seeding MongoDB")
+    import pymongo
+    import importlib.util
+
+    seed_file = SCRIPT_DIR / "seed_mongo.py"
+    if not seed_file.exists():
+        err(f"Seed file not found: {seed_file}")
+        return False
+
+    try:
+        # dynamically import seed_mongo.py and call its seed() function
+        spec = importlib.util.spec_from_file_location("seed_mongo", seed_file)
+        mod  = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        client = pymongo.MongoClient(host=MONGO_HOST, port=MONGO_PORT)
+        db     = client[MONGO_DB]
+        results = mod.seed(db)
+        client.close()
+
+        for coll, res in results.items():
+            if res.get("skipped"):
+                ok(f"{coll}: already seeded ({res['count']} docs)")
+            else:
+                ok(f"{coll}: inserted {res['count']} docs")
+
+        return True
+
+    except Exception as e:
+        err(f"MongoDB seeding failed: {e}")
+        return False
+
+
+# ── step 4: seed PostgreSQL ───────────────────────────────────────────────────
 
 def seed_postgres():
     banner("Seeding PostgreSQL")
@@ -285,11 +365,13 @@ def main():
     if not args.no_docker:
         results["FalkorDB container"]   = ensure_falkordb()
         results["PostgreSQL container"] = ensure_postgres()
+        results["MongoDB container"]    = ensure_mongo()
     else:
         info("Skipping Docker management (--no-docker)")
 
     if not args.no_seed and SEED_ON_STARTUP:
         results["PostgreSQL seed"] = seed_postgres()
+        results["MongoDB seed"]    = seed_mongo()
     else:
         info("Skipping seed (--no-seed or SEED_ON_STARTUP=false)")
 
