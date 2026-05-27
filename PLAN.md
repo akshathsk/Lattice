@@ -29,8 +29,8 @@ Data Sources
     │  vector                      │  ML outputs                      │
     │                              ▼                                  │
     │                    [ Graph Context Fetch ]                      │
-    │                      Neo4j → existing labels, rel types,        │
-    │                               top-N fuzzy entity matches        │
+    │                      Graph DB Plugin → existing labels,         │
+    │                      rel types, top-N fuzzy entity matches      │
     │                              │                                  │
     │                              │  graph context                   │
     │                              └──────────────┬────────────────────┘
@@ -42,8 +42,15 @@ Data Sources
     │                                             │
     │              ┌──────────────────────────────┘
     ▼              ▼
-[ Graph Store (Neo4j) ]
-  (:Chunk {embedding})  ← vector index (native Neo4j 5)
+[ Graph DB Plugin ]          ← swappable backend (config-driven)
+  FalkorDBPlugin  ← default, ships first
+  Neo4jPlugin     ← future
+  MemgraphPlugin  ← future
+  KuzuPlugin      ← future
+                   │
+                   ▼
+[ Graph Store ]
+  (:Chunk {embedding})  ← vector index (native to each plugin's DB)
   (:Entity)
   (:Chunk)-[:MENTIONS]->(:Entity)   ← chunk linked to every entity it produced
   (:Entity)-[:RELATION]->(:Entity)
@@ -74,8 +81,8 @@ Data Sources
 | LLM | Claude (claude-sonnet-4-6) | Relation extraction, entity disambiguation, graph-aware merging |
 | NER (zero-shot) | GLiNER | Fast local entity detection with no predefined type list; no API cost |
 | NLP pipeline | spaCy | Dependency parsing, coreference, POS — feeds structured hints to GLiNER and Claude |
-| Embeddings | `sentence-transformers` (local) | Chunk vectorisation + entity dedup; stored directly in Neo4j via native vector index — no separate vector DB needed |
-| Graph DB | Neo4j 5 (Community or AuraDB free tier) | Most mature graph DB, Cypher query language, great tooling |
+| Embeddings | `sentence-transformers` (local) | Chunk vectorisation + entity dedup; stored directly in the graph DB via its native vector index — no separate vector DB needed |
+| Graph DB | Plugin-based (FalkorDB default) | Swappable backend; FalkorDB ships first — Redis-backed, GraphBLAS traversal, native HNSW vector index, openCypher |
 | Pipeline orchestration | Custom (simple queue) → Prefect later | Start simple, add scheduling when needed |
 | Document parsing | `unstructured` (open source) | Single library handles PDF, Word, HTML, images, email, etc. |
 | Structured data | `pandas` + `sqlalchemy` | CSV, Excel, JSON, SQL databases |
@@ -91,8 +98,50 @@ Data Sources
 ### Infrastructure
 | Layer | Choice | Reason |
 |---|---|---|
-| Local dev | Docker Compose | Neo4j + API + UI in one command |
+| Local dev | Docker Compose | FalkorDB + API + UI in one command |
 | Secrets | `.env` files | Simple for now |
+
+---
+
+## Graph Database Plugins (Pluggable)
+
+Each graph DB plugin implements a common `GraphDBPlugin` abstract interface. Swapping the database requires only a config change — no changes to the extraction pipeline, chatbot, or API layer.
+
+### Plugin Interface
+
+Every plugin must implement these operations:
+
+| Method | Purpose |
+|---|---|
+| `write_chunk(chunk, embedding)` | Store a chunk node with its vector |
+| `write_entities(entities)` | Upsert entity nodes (merge by id) |
+| `write_relations(triples)` | Write typed edges between entities |
+| `write_mentions(chunk_id, entity_ids)` | Link chunk → entities it produced |
+| `get_schema()` | Return existing entity types + relation types (for graph context fetch) |
+| `fuzzy_match_entities(names)` | Find existing nodes that may match candidate names |
+| `vector_search(embedding, k)` | KNN search on chunk embeddings → top-K chunks |
+| `traverse(entity_ids, hops)` | N-hop graph traversal from anchor entities |
+| `create_indexes()` | Create vector + range indexes on startup |
+| `health_check()` | Verify connection is live |
+
+The plugin is selected via `GRAPH_DB_PLUGIN` env var (default: `falkordb`).
+
+### Available Plugins
+
+| Plugin | Status | DB | Notes |
+|---|---|---|---|
+| `falkordb` | **Ships first** | FalkorDB (Redis module) | GraphBLAS traversal, native HNSW, openCypher, Bolt protocol |
+| `neo4j` | Future | Neo4j 5 | Mature ecosystem, disk-based, AuraDB managed option |
+| `memgraph` | Future | Memgraph | In-memory, real-time streaming, openCypher |
+| `kuzu` | Future | Kuzu | Embeddable, no server, analytical queries |
+
+### FalkorDB Plugin (default)
+
+- Connects via the `falkordb` Python client (or `neo4j` driver over Bolt)
+- Vector index: `CREATE VECTOR INDEX FOR (c:Chunk) ON (c.embedding)` with HNSW cosine
+- KNN query: `CALL db.idx.vector.queryNodes('Chunk', 'embedding', $k, vecf32($vec))`
+- Schema introspection: maintained in a Redis hash (`HSET lattice:schema labels ...`) updated on every write, since FalkorDB doesn't expose `db.labels()` as a procedure
+- Source: [`FalkorDB/`](./FalkorDB/) submodule (fork: [akshathsk/FalkorDB-lattice](https://github.com/akshathsk/FalkorDB-lattice))
 
 ---
 
@@ -293,8 +342,12 @@ knowledge-graph-lattice/
 │   │   ├── llm_extractor.py     # Stage 2: Claude extraction with graph context
 │   │   └── dedup.py             # Embedding-based merge candidates
 │   ├── graph/
-│   │   ├── store.py             # Neo4j driver wrapper
-│   │   └── queries.py           # Cypher query templates
+│   │   ├── base.py              # GraphDBPlugin abstract interface
+│   │   ├── falkordb.py          # FalkorDB plugin (default)
+│   │   ├── neo4j.py             # Neo4j plugin (future)
+│   │   ├── memgraph.py          # Memgraph plugin (future)
+│   │   ├── kuzu.py              # Kuzu plugin (future)
+│   │   └── factory.py           # Reads GRAPH_DB_PLUGIN env var, returns the right plugin
 │   ├── chat/
 │   │   ├── vector_retriever.py  # Path A: vector search on chunk embeddings
 │   │   ├── graph_retriever.py   # Path B: entity lookup + N-hop traversal
@@ -331,9 +384,11 @@ knowledge-graph-lattice/
 - [ ] Stage 1: GLiNER + spaCy ML extractor
 - [ ] Graph context fetch (Cypher queries for labels, rel types, fuzzy entity matches)
 - [ ] Stage 2: Claude LLM extractor (receives chunk + ML output + graph context)
-- [ ] Neo4j store: write Chunk nodes with embeddings, Entity nodes, RELATION edges, MENTIONS edges
+- [ ] `GraphDBPlugin` abstract interface (`base.py`)
+- [ ] `factory.py` (reads `GRAPH_DB_PLUGIN` env var, instantiates the right plugin)
+- [ ] FalkorDB plugin: write Chunk nodes with embeddings, Entity nodes, RELATION + MENTIONS edges, schema tracking in Redis hash
 - [ ] Basic FastAPI: `POST /ingest/file`, `GET /graph/nodes`, `GET /graph/edges`
-- [ ] Docker Compose with Neo4j
+- [ ] Docker Compose with FalkorDB
 
 ### Phase 2 — More Connectors
 - [ ] CSV / Excel connector (structured → triples via LLM column understanding)
