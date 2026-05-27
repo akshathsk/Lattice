@@ -44,7 +44,7 @@ MONGO_HOST      = os.getenv("MONGO_HOST", "localhost")
 MONGO_PORT      = int(os.getenv("MONGO_PORT", 27017))
 MONGO_DB        = os.getenv("MONGO_DB", "contracts_docs")
 SEED_ON_STARTUP = os.getenv("SEED_ON_STARTUP", "true").lower() == "true"
-SCRIPT_DIR      = Path(__file__).parent / "scripts"
+CONNECTORS_DIR  = Path(__file__).parent / "connectors"
 
 DOCKER_ENV = {**os.environ, "DOCKER_HOST": DOCKER_HOST}
 
@@ -205,14 +205,14 @@ def seed_mongo():
     import pymongo
     import importlib.util
 
-    seed_file = SCRIPT_DIR / "seed_mongo.py"
+    seed_file = CONNECTORS_DIR / "mongo" / "seed.py"
     if not seed_file.exists():
         err(f"Seed file not found: {seed_file}")
         return False
 
     try:
         # dynamically import seed_mongo.py and call its seed() function
-        spec = importlib.util.spec_from_file_location("seed_mongo", seed_file)
+        spec = importlib.util.spec_from_file_location("mongo_seed", seed_file)
         mod  = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
@@ -240,7 +240,7 @@ def seed_postgres():
     banner("Seeding PostgreSQL")
     import psycopg2
 
-    sql_file = SCRIPT_DIR / "seed_postgres.sql"
+    sql_file = CONNECTORS_DIR / "postgres" / "seed.sql"
     if not sql_file.exists():
         err(f"Seed file not found: {sql_file}")
         return False
