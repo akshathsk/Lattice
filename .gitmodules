@@ -1,0 +1,3 @@
+[submodule "FalkorDB"]
+	path = FalkorDB
+	url = https://github.com/akshathsk/FalkorDB-lattice.git
