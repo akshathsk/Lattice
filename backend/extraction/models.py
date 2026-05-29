@@ -45,6 +45,46 @@ class SpacyRelation(BaseModel):
     sentence:      str
 
 
+class GlinerEntity(BaseModel):
+    """
+    A named entity detected by GLiNER using the live graph schema as labels.
+
+    ``label``  : the graph schema type that was passed as a label to GLiNER
+                 (e.g. "Organization", "Contract") — already in graph casing.
+    ``score``  : GLiNER confidence score (0–1).
+    ``sentence``: sentence the entity appeared in (for LLM context).
+    """
+
+    text:     str
+    label:    str    # graph schema type, PascalCase
+    score:    float
+    sentence: str
+
+
+class GlinerResult(BaseModel):
+    """
+    Output of one GLiNER extraction call.
+
+    GLiNER only does NER (no relation extraction) — relations come from spaCy
+    and the LLM.  When the schema is empty (first ingestion run) ``skipped``
+    is True and ``entities`` is empty.
+    """
+
+    entities: list[GlinerEntity] = Field(default_factory=list)
+    skipped:  bool               = False   # True when schema was empty
+    labels_used: list[str]       = Field(default_factory=list)
+
+    def to_prompt_dict(self) -> dict:
+        """Compact representation for the GPT prompt."""
+        seen: set[str] = set()
+        ents = []
+        for e in self.entities:
+            if e.text not in seen:
+                seen.add(e.text)
+                ents.append({"text": e.text, "type": e.label, "score": round(e.score, 3)})
+        return {"entities": ents, "skipped": self.skipped}
+
+
 class SpacyResult(BaseModel):
     """
     Combined output of one spaCy extraction call on a single chunk.
