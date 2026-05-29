@@ -8,8 +8,12 @@ What it does:
   2. Waits for all three to be healthy
   3. Seeds PostgreSQL with structured contract data (idempotent)
   4. Seeds MongoDB with unstructured legal documents (idempotent)
-  5. Initialises FalkorDB vector indexes and schema
+  5. Creates FalkorDB vector indexes (dim=768, cosine) — infrastructure only
   6. Prints a ready summary
+
+Note: no schema (entity types, relation types) is seeded at startup.
+The graph schema is entirely empty until the first ingestion run.
+It grows organically as GPT-4o processes chunks and writes new types.
 
 Usage:
   python backend/startup.py
@@ -306,27 +310,10 @@ def init_falkordb():
             else:
                 raise
 
-        # initialise schema tracking key in Redis
-        import redis
-        r = redis.Redis(host=FALKORDB_HOST, port=FALKORDB_PORT)
-        if not r.exists("lattice:schema:labels"):
-            r.sadd("lattice:schema:labels",
-                   "Person", "Organization", "Location",
-                   "Product", "Event", "Concept", "Date", "Technology",
-                   # legal domain seeds
-                   "Contract", "Clause", "Obligation", "Regulation", "Party")
-            ok("Schema label seed set initialised")
-        else:
-            ok("Schema label seed set already exists")
-
-        if not r.exists("lattice:schema:rel_types"):
-            r.sadd("lattice:schema:rel_types",
-                   "PARTY_TO", "GOVERNS", "REFERENCES", "OBLIGATES",
-                   "SIGNED_BY", "MENTIONS", "RELATED_TO")
-            ok("Schema relation type seed set initialised")
-        else:
-            ok("Schema relation type seed set already exists")
-
+        # Schema (labels + rel_types) is NOT seeded here.
+        # It starts empty and grows entirely from extraction output —
+        # GPT-4o writes new types as it processes each chunk.
+        # GLiNER reads the live schema before each extraction run.
         ok(f"FalkorDB graph 'lattice' ready at {FALKORDB_HOST}:{FALKORDB_PORT}")
         return True
 
