@@ -6,7 +6,7 @@ psycopg2-binary==2.9.9
 sqlalchemy==2.0.36
 
 # ── LLM & Embeddings ──────────────────────────────────────────────────────────
-anthropic==0.40.0
+openai>=1.30.0
 sentence-transformers==3.3.1
 
 # ── ML Extraction ─────────────────────────────────────────────────────────────
