@@ -7,7 +7,7 @@ Stages (built incrementally):
   1. embedder.py         — sentence-transformers → 768-dim vectors   ✓
   2. spacy_extractor.py  — NER + SVO dependency parse → hints        ✓
   3. gliner_extractor.py — zero-shot NER from live graph schema      ✓
-  4. graph_context.py    — query FalkorDB for existing entities      (next)
+  4. graph_context.py    — query FalkorDB for existing entities      ✓
   5. llm_extractor.py    — GPT-4o → refined structured output       (next)
 """
 
