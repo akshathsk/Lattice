@@ -107,7 +107,14 @@ class GraphContext(BaseModel):
                 }
                 for m in self.entity_matches
             ],
-            "existing_relations": self.neighbourhood,
+            "existing_relations": [
+                {
+                    "src":  e.get("src_name", e.get("src")),
+                    "rel":  e["type"],
+                    "dst":  e.get("dst_name", e.get("dst")),
+                }
+                for e in self.neighbourhood
+            ],
         }
 
 

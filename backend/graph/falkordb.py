@@ -380,35 +380,53 @@ class FalkorDBPlugin(GraphDBPlugin):
 
         Traverses in both directions (undirected) so callers get the full
         local neighbourhood regardless of edge orientation.
+
+        Node dicts include all stored properties except ``embedding``.
+        Edge dicts carry resolved names/types for both endpoints so callers
+        don't need to do a separate id→name lookup.
         """
-        # Nodes
+        # ── Nodes — all properties except the embedding vector ────────────────
         node_res = self._graph.query(
             f"""
             MATCH (seed:Entity {{id: $id}})-[*1..{hops}]-(n:Entity)
-            RETURN DISTINCT n.id, n.name, n.type
+            WITH DISTINCT n
+            WITH n,
+                 [k IN keys(n)
+                  WHERE k <> 'embedding' AND k <> 'id'
+                        AND k <> 'name'  AND k <> 'type'] AS attr_keys
+            RETURN n.id, n.name, n.type, attr_keys,
+                   [k IN attr_keys | n[k]] AS attr_vals
             """,
             {"id": entity_id},
         )
-        nodes = [
-            {"id": row[0], "name": row[1], "type": row[2]}
-            for row in node_res.result_set
-        ]
+        nodes = []
+        for row in node_res.result_set:
+            attrs = dict(zip(row[3], row[4])) if row[3] else {}
+            nodes.append({"id": row[0], "name": row[1], "type": row[2], **attrs})
 
-        # Edges (relationships between the seed and its neighbours)
+        # ── Edges — name-resolved so the LLM sees entity names, not IDs ──────
         edge_res = self._graph.query(
             f"""
             MATCH (a:Entity {{id: $id}})-[*1..{hops}]-(b:Entity)
             WITH a, b
             MATCH (a)-[r]->(b)
-            RETURN a.id, type(r), b.id
+            RETURN a.id, a.name, a.type, type(r), b.id, b.name, b.type
             UNION
             MATCH (a:Entity)-[r]->(b:Entity {{id: $id}})
-            RETURN a.id, type(r), b.id
+            RETURN a.id, a.name, a.type, type(r), b.id, b.name, b.type
             """,
             {"id": entity_id},
         )
         edges = [
-            {"src": row[0], "type": row[1], "dst": row[2]}
+            {
+                "src":      row[0],
+                "src_name": row[1],
+                "src_type": row[2],
+                "type":     row[3],
+                "dst":      row[4],
+                "dst_name": row[5],
+                "dst_type": row[6],
+            }
             for row in edge_res.result_set
         ]
 

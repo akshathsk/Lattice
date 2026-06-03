@@ -67,8 +67,8 @@ _USER_TEMPLATE = """\
 ## Retrieved passages
 {passages}
 
-## Graph triples
-{triples}
+## Knowledge graph
+{graph}
 
 ## Question
 {query}
@@ -140,13 +140,16 @@ class Chatbot:
         result: "RetrievalResult",
     ) -> list[dict[str, str]]:
         passages = _format_passages(result.chunks[: self._top_chunks])
-        triples  = _format_triples(result.subgraph_edges[: self._top_edges])
+        graph    = _format_graph(
+            result.subgraph_nodes,
+            result.subgraph_edges[: self._top_edges],
+        )
 
         return [
             {"role": "system", "content": _SYSTEM},
             {"role": "user",   "content": _USER_TEMPLATE.format(
                 passages = passages,
-                triples  = triples or "(none)",
+                graph    = graph or "(none)",
                 query    = query.strip(),
             )},
         ]
@@ -164,15 +167,60 @@ def _format_passages(chunks) -> str:
     return "\n\n".join(parts)
 
 
-def _format_triples(edges: list[dict]) -> str:
+def _node_label(node: dict) -> str:
+    """
+    Format a node dict as a readable Cypher-like label with any extra
+    attributes (all keys except id, name, type).
+
+        (Acme Corp:Organization)
+        (Net 30:Contractual_Term {value: "30 days"})
+    """
+    name = node.get("name", node.get("id", "?"))
+    type_ = node.get("type", "")
+    extras = {k: v for k, v in node.items() if k not in ("id", "name", "type")}
+    if extras:
+        attr_str = ", ".join(f'{k}: "{v}"' for k, v in extras.items())
+        return f"({name}:{type_} {{{attr_str}}})"
+    return f"({name}:{type_})"
+
+
+def _format_graph(nodes: list[dict], edges: list[dict]) -> str:
+    """
+    Render the subgraph as Cypher-style triples with entity names and types.
+
+    Each edge is formatted as:
+        (SrcName:SrcType) -[RELATION]-> (DstName:DstType)
+
+    Attributes on either node are included in curly braces when present.
+    """
     if not edges:
         return ""
-    # Deduplicate identical triples that may appear from different traversals
+
+    # Build id → node dict so we can look up attributes for edge endpoints.
+    # Falls back to just name+type if a node isn't in the traversal set.
+    node_by_id: dict[str, dict] = {n["id"]: n for n in nodes if "id" in n}
+
     seen: set[tuple] = set()
     lines: list[str] = []
+
     for e in edges:
         key = (e["src"], e["type"], e["dst"])
-        if key not in seen:
-            seen.add(key)
-            lines.append(f"{e['src']} -[{e['type']}]-> {e['dst']}")
+        if key in seen:
+            continue
+        seen.add(key)
+
+        # Resolve source node — prefer full node dict, fall back to edge fields
+        src_node = node_by_id.get(e["src"], {
+            "name": e.get("src_name", e["src"]),
+            "type": e.get("src_type", ""),
+        })
+        dst_node = node_by_id.get(e["dst"], {
+            "name": e.get("dst_name", e["dst"]),
+            "type": e.get("dst_type", ""),
+        })
+
+        lines.append(
+            f"{_node_label(src_node)} -[{e['type']}]-> {_node_label(dst_node)}"
+        )
+
     return "\n".join(lines)
