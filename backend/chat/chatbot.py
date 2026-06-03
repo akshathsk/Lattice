@@ -64,10 +64,10 @@ Rules:
 """
 
 _USER_TEMPLATE = """\
-## Retrieved passages
+## Retrieved passages (Graph RAG)
 {passages}
 
-## Knowledge graph
+## Knowledge graph (Cypher traversal)
 {graph}
 
 ## Question
@@ -141,6 +141,7 @@ class Chatbot:
     ) -> list[dict[str, str]]:
         passages = _format_passages(result.chunks[: self._top_chunks])
         graph    = _format_graph(
+            result.entity_matches,
             result.subgraph_nodes,
             result.subgraph_edges[: self._top_edges],
         )
@@ -169,13 +170,12 @@ def _format_passages(chunks) -> str:
 
 def _node_label(node: dict) -> str:
     """
-    Format a node dict as a readable Cypher-like label with any extra
-    attributes (all keys except id, name, type).
+    Format a node dict as a Cypher-like node label with any extra attributes.
 
         (Acme Corp:Organization)
         (Net 30:Contractual_Term {value: "30 days"})
     """
-    name = node.get("name", node.get("id", "?"))
+    name  = node.get("name", node.get("id", "?"))
     type_ = node.get("type", "")
     extras = {k: v for k, v in node.items() if k not in ("id", "name", "type")}
     if extras:
@@ -184,43 +184,74 @@ def _node_label(node: dict) -> str:
     return f"({name}:{type_})"
 
 
-def _format_graph(nodes: list[dict], edges: list[dict]) -> str:
+def _format_graph(
+    entity_matches: list,
+    nodes:          list[dict],
+    edges:          list[dict],
+) -> str:
     """
-    Render the subgraph as Cypher-style triples with entity names and types.
+    Render the full Cypher traversal context for the LLM.
 
-    Each edge is formatted as:
-        (SrcName:SrcType) -[RELATION]-> (DstName:DstType)
-
-    Attributes on either node are included in curly braces when present.
+    Structure
+    ---------
+    Matched entities   — the KNN anchors directly tied to the query,
+                         listed with all their attributes.
+    Subgraph entities  — every other node reachable in the traversal.
+    Relationships      — all edges within the subgraph, formatted as
+                             (SrcName:SrcType) -[RELATION]-> (DstName:DstType)
     """
-    if not edges:
+    if not entity_matches and not nodes and not edges:
         return ""
 
-    # Build id → node dict so we can look up attributes for edge endpoints.
-    # Falls back to just name+type if a node isn't in the traversal set.
-    node_by_id: dict[str, dict] = {n["id"]: n for n in nodes if "id" in n}
+    parts: list[str] = []
 
-    seen: set[tuple] = set()
-    lines: list[str] = []
+    # ── 1. Matched entity anchors ──────────────────────────────────────────────
+    if entity_matches:
+        anchor_ids = {e.entity_id for e in entity_matches}
+        parts.append("Matched entities:")
+        node_by_id: dict[str, dict] = {n["id"]: n for n in nodes if "id" in n}
+        for match in entity_matches:
+            # Use full node dict if available (has extra attrs), else fallback
+            node = node_by_id.get(match.entity_id, {
+                "name": match.name,
+                "type": match.type,
+            })
+            parts.append(f"  {_node_label(node)}")
+    else:
+        anchor_ids: set[str] = set()
 
-    for e in edges:
-        key = (e["src"], e["type"], e["dst"])
-        if key in seen:
-            continue
-        seen.add(key)
+    # ── 2. Remaining subgraph nodes ────────────────────────────────────────────
+    other_nodes = [n for n in nodes if n.get("id") not in anchor_ids]
+    if other_nodes:
+        parts.append("Subgraph entities:")
+        for n in other_nodes:
+            parts.append(f"  {_node_label(n)}")
 
-        # Resolve source node — prefer full node dict, fall back to edge fields
-        src_node = node_by_id.get(e["src"], {
-            "name": e.get("src_name", e["src"]),
-            "type": e.get("src_type", ""),
-        })
-        dst_node = node_by_id.get(e["dst"], {
-            "name": e.get("dst_name", e["dst"]),
-            "type": e.get("dst_type", ""),
-        })
+    # ── 3. All relationships within the subgraph ───────────────────────────────
+    if edges:
+        node_by_id = {n["id"]: n for n in nodes if "id" in n}
+        seen: set[tuple] = set()
+        rel_lines: list[str] = []
 
-        lines.append(
-            f"{_node_label(src_node)} -[{e['type']}]-> {_node_label(dst_node)}"
-        )
+        for e in edges:
+            key = (e["src"], e["type"], e["dst"])
+            if key in seen:
+                continue
+            seen.add(key)
 
-    return "\n".join(lines)
+            src_node = node_by_id.get(e["src"], {
+                "name": e.get("src_name", e["src"]),
+                "type": e.get("src_type", ""),
+            })
+            dst_node = node_by_id.get(e["dst"], {
+                "name": e.get("dst_name", e["dst"]),
+                "type": e.get("dst_type", ""),
+            })
+            rel_lines.append(
+                f"  {_node_label(src_node)} -[{e['type']}]-> {_node_label(dst_node)}"
+            )
+
+        parts.append("Relationships:")
+        parts.extend(rel_lines)
+
+    return "\n".join(parts)

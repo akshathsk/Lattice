@@ -404,15 +404,15 @@ class FalkorDBPlugin(GraphDBPlugin):
             attrs = dict(zip(row[3], row[4])) if row[3] else {}
             nodes.append({"id": row[0], "name": row[1], "type": row[2], **attrs})
 
-        # ── Edges — name-resolved so the LLM sees entity names, not IDs ──────
+        # ── Edges — all edges between subgraph nodes (not just seed-adjacent) ──
+        # Collect the IDs of every node in the subgraph (seed + reachable nodes),
+        # then match all edges whose both endpoints are in that set.
         edge_res = self._graph.query(
             f"""
-            MATCH (a:Entity {{id: $id}})-[*1..{hops}]-(b:Entity)
-            WITH a, b
-            MATCH (a)-[r]->(b)
-            RETURN a.id, a.name, a.type, type(r), b.id, b.name, b.type
-            UNION
-            MATCH (a:Entity)-[r]->(b:Entity {{id: $id}})
+            MATCH (seed:Entity {{id: $id}})-[*1..{hops}]-(n:Entity)
+            WITH collect(DISTINCT n.id) + [$id] AS all_ids
+            MATCH (a:Entity)-[r]->(b:Entity)
+            WHERE a.id IN all_ids AND b.id IN all_ids
             RETURN a.id, a.name, a.type, type(r), b.id, b.name, b.type
             """,
             {"id": entity_id},
