@@ -113,6 +113,19 @@ class GraphDBPlugin(ABC):
         """
 
     @abstractmethod
+    def get_chunks_mentioning(
+        self,
+        entity_ids: list[str],
+        limit:      int = 20,
+    ) -> list[ChunkResult]:
+        """
+        Return chunks that have a MENTIONS edge to any of the given entity IDs.
+
+        Used by the RAG graph retriever to surface the source text that
+        produced the matched entities.
+        """
+
+    @abstractmethod
     def vector_search(
         self,
         embedding: list[float],

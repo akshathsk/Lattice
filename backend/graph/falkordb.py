@@ -85,9 +85,29 @@ class FalkorDBPlugin(GraphDBPlugin):
 
     # ── admin ─────────────────────────────────────────────────────────────────
 
-    def create_indexes(self) -> None:
-        """Ensure Chunk and Entity vector indexes exist (idempotent)."""
+    def create_indexes(self, rebuild: bool = False) -> None:
+        """
+        Ensure Chunk and Entity vector indexes exist.
+
+        Parameters
+        ----------
+        rebuild : Drop-and-recreate even if the index already exists.
+                  Use this after a bulk ingest — FalkorDB's HNSW index is
+                  built on graph state at creation time and does not always
+                  backfill nodes that receive embeddings via MERGE+SET later.
+                  Calling create_indexes(rebuild=True) after the first ingest
+                  guarantees all existing nodes are covered.
+        """
         for label in ("Chunk", "Entity"):
+            if rebuild:
+                try:
+                    self._graph.query(
+                        f"DROP VECTOR INDEX FOR (n:{label}) ON (n.embedding)"
+                    )
+                    logger.info("Dropped vector index for :%s (rebuild)", label)
+                except Exception:
+                    pass  # didn't exist — fine
+
             try:
                 self._graph.query(f"""
                     CREATE VECTOR INDEX FOR (n:{label}) ON (n.embedding)
@@ -270,6 +290,43 @@ class FalkorDBPlugin(GraphDBPlugin):
                 name      = row[1],
                 type      = row[2],
                 score     = row[3],
+            )
+            for row in res.result_set
+        ]
+
+    # ── read: chunks by entity ────────────────────────────────────────────────
+
+    def get_chunks_mentioning(
+        self,
+        entity_ids: list[str],
+        limit:      int = 20,
+    ) -> list[ChunkResult]:
+        """Return chunks that have a MENTIONS edge to any of the given entities."""
+        res = self._graph.query(
+            """
+            MATCH (c:Chunk)-[:MENTIONS]->(e:Entity)
+            WHERE e.id IN $ids
+            RETURN DISTINCT c.id,
+                            c.text,
+                            c.source,
+                            c.database,
+                            c.collection,
+                            c.record_id,
+                            c.chunk_index
+            LIMIT $limit
+            """,
+            {"ids": entity_ids, "limit": limit},
+        )
+        return [
+            ChunkResult(
+                chunk_id    = row[0],
+                text        = row[1],
+                source      = row[2],
+                database    = row[3],
+                collection  = row[4],
+                record_id   = row[5],
+                chunk_index = row[6],
+                score       = 0.0,  # no vector score — ranked by the merger
             )
             for row in res.result_set
         ]
