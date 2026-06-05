@@ -39,13 +39,18 @@ The graph schema emerges from the data — nothing is seeded at startup.
 
 ```bash
 # 1. Start FalkorDB + Postgres + Mongo
-docker compose up -d   # or start the existing containers
+docker compose up -d
 
 # 2. Start the API
 cd backend && python3 -m uvicorn main:app --reload
 
-# 3. Open the UI
-open frontend/index.html
+# 3. Start the React UI  (http://localhost:3000)
+cd frontend && npm install && npm run dev
+```
+
+### Build for production
+```bash
+cd frontend && npm run build   # outputs to frontend/dist/
 ```
 
 ## API
