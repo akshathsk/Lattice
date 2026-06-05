@@ -12,7 +12,8 @@ claim it makes.
 Streaming
 ---------
 ``chat()`` is a generator that yields text delta strings as they arrive from
-OpenAI.  Callers (FastAPI StreamingResponse, CLI, tests) consume the stream.
+OpenAI.  In debug mode it yields SSE-formatted JSON events (``data: {...}\\n\\n``)
+for every pipeline step before streaming token events.
 
 Usage
 -----
@@ -22,12 +23,18 @@ Usage
 
     bot = Chatbot(Retriever(get_graph_plugin()))
 
+    # Normal streaming
     for token in bot.chat("What are Acme Corp's payment obligations?"):
         print(token, end="", flush=True)
+
+    # Debug streaming — yields SSE step events then token events
+    for event in bot.chat("...", debug=True):
+        print(event)
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -75,6 +82,13 @@ _USER_TEMPLATE = """\
 """
 
 
+# ── SSE helper ────────────────────────────────────────────────────────────────
+
+def _sse(data: dict) -> str:
+    """Encode a dict as an SSE data event: ``data: {...}\\n\\n``."""
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 # ── chatbot ───────────────────────────────────────────────────────────────────
 
 class Chatbot:
@@ -106,14 +120,21 @@ class Chatbot:
 
     # ── public ────────────────────────────────────────────────────────────────
 
-    def chat(self, query: str) -> Generator[str, None, None]:
+    def chat(self, query: str, debug: bool = False) -> Generator[str, None, None]:
         """
         Retrieve context and stream a GPT-4o answer.
 
-        Yields text delta strings as they arrive.
+        Normal mode  — yields raw text delta strings.
+        Debug mode   — yields SSE-formatted JSON events:
+            {"t":"step", "step":"retrieval"|"graph"|"prompt", ...}
+            {"t":"token", "content":"..."}
+            {"t":"done"}
         """
-        result = self._retriever.retrieve(query)
+        result   = self._retriever.retrieve(query)
         messages = self._build_messages(query, result)
+
+        if debug:
+            yield from self._debug_steps(result, messages)
 
         logger.info(
             "Chatbot: %d chunks | %d triples | model=%s",
@@ -130,7 +151,93 @@ class Chatbot:
         for chunk in stream:
             delta = chunk.choices[0].delta.content
             if delta:
-                yield delta
+                if debug:
+                    yield _sse({"t": "token", "content": delta})
+                else:
+                    yield delta
+
+        if debug:
+            yield _sse({"t": "done"})
+
+    # ── debug steps ───────────────────────────────────────────────────────────
+
+    def _debug_steps(
+        self,
+        result:   "RetrievalResult",
+        messages: list[dict],
+    ) -> Generator[str, None, None]:
+        """Yield SSE step events describing every pipeline stage."""
+
+        # Classify chunks by retrieval path
+        vec_chunks  = [c for c in result.chunks if c.via == ["vector"]]
+        grph_chunks = [c for c in result.chunks if c.via == ["graph"]]
+        both_chunks = [c for c in result.chunks if len(c.via) > 1]
+
+        # ── Step 1: Retrieval ─────────────────────────────────────────────────
+        yield _sse({
+            "t":     "step",
+            "step":  "retrieval",
+            "label": "Retrieval",
+            "detail": {
+                "embedding_dim":   768,
+                "path_a_chunks":   len(vec_chunks) + len(both_chunks),
+                "path_b_entities": len(result.entity_matches),
+                "path_b_chunks":   len(grph_chunks) + len(both_chunks),
+                "boosted_chunks":  len(both_chunks),
+                "total_ranked":    len(result.chunks),
+            },
+            "entities": [
+                {
+                    "name": e.name,
+                    "type": e.type,
+                    "dist": round(e.score, 3),
+                }
+                for e in result.entity_matches
+            ],
+            "chunks": [
+                {
+                    "collection": c.collection,
+                    "record_id":  c.record_id,
+                    "score":      round(c.score, 3),
+                    "via":        c.via,
+                    "preview":    c.text[:200].strip(),
+                }
+                for c in result.chunks[: self._top_chunks]
+            ],
+        })
+
+        # ── Step 2: Graph traversal ───────────────────────────────────────────
+        yield _sse({
+            "t":     "step",
+            "step":  "graph",
+            "label": "Graph Traversal",
+            "detail": {
+                "anchors": len(result.entity_matches),
+                "hops":    2,
+                "nodes":   len(result.subgraph_nodes),
+                "edges":   len(result.subgraph_edges),
+            },
+            "edges": [
+                {
+                    "src": e.get("src_name", e["src"]),
+                    "rel": e["type"],
+                    "dst": e.get("dst_name", e["dst"]),
+                }
+                for e in result.subgraph_edges[: 40]
+            ],
+        })
+
+        # ── Step 3: LLM prompt ────────────────────────────────────────────────
+        yield _sse({
+            "t":     "step",
+            "step":  "prompt",
+            "label": "LLM Prompt",
+            "detail": {
+                "model":    self._model,
+                "messages": len(messages),
+            },
+            "messages": messages,
+        })
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
@@ -211,7 +318,6 @@ def _format_graph(
         parts.append("Matched entities:")
         node_by_id: dict[str, dict] = {n["id"]: n for n in nodes if "id" in n}
         for match in entity_matches:
-            # Use full node dict if available (has extra attrs), else fallback
             node = node_by_id.get(match.entity_id, {
                 "name": match.name,
                 "type": match.type,

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lattice</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ── Sidebar ────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-top">
+      <div class="logo">◈ Lattice</div>
+      <nav class="nav">
+        <button class="nav-btn active" data-page="chat">
+          <span class="nav-icon">💬</span> Chat
+        </button>
+        <button class="nav-btn" data-page="graph">
+          <span class="nav-icon">🕸️</span> Graph
+        </button>
+        <button class="nav-btn" data-page="connectors">
+          <span class="nav-icon">🔌</span> Connectors
+        </button>
+      </nav>
+    </div>
+
+    <div class="sidebar-bottom">
+      <label class="api-label">API URL</label>
+      <div class="api-row">
+        <input id="api-url" class="api-input" type="text" value="http://localhost:8000" />
+        <span id="health-dot" class="health-dot" title="Checking…"></span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main ───────────────────────────────────────────────── -->
+  <main class="main">
+
+    <!-- ── Chat page ──────────────────────────────────────── -->
+    <section id="page-chat" class="page active">
+      <div class="page-header">
+        <div class="page-header-inner">
+          <div>
+            <h1>Ask Lattice</h1>
+            <p class="subtitle">Query your knowledge graph with natural language</p>
+          </div>
+          <label class="debug-toggle" title="Show pipeline steps for each answer">
+            <input type="checkbox" id="debug-checkbox" />
+            <span class="debug-toggle-track">
+              <span class="debug-toggle-thumb"></span>
+            </span>
+            <span class="debug-toggle-label">Debug</span>
+          </label>
+        </div>
+      </div>
+
+      <div id="messages" class="messages">
+        <div class="empty-state" id="empty-state">
+          <div class="big-icon">◈</div>
+          <p>Ask anything about your ingested data</p>
+        </div>
+      </div>
+
+      <div class="chat-bar">
+        <textarea id="chat-input" class="chat-input" rows="1"
+          placeholder="Ask anything about your data…"></textarea>
+        <button id="send-btn" class="send-btn" title="Send (Enter)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </div>
+    </section>
+
+    <!-- ── Graph page ──────────────────────────────────────── -->
+    <section id="page-graph" class="page">
+      <div class="page-header">
+        <h1>Graph</h1>
+        <p class="subtitle">Explore entities and relationships in the knowledge graph</p>
+      </div>
+
+      <div class="graph-body">
+        <!-- Graph sidebar: controls + stats + selected node -->
+        <aside class="graph-sidebar">
+
+          <div class="g-section">
+            <h3 class="g-section-title">Load</h3>
+            <label class="g-label">Max nodes
+              <input id="g-limit" type="number" value="300" min="10" max="2000" />
+            </label>
+            <label class="g-label" style="margin-top:8px">Search
+              <input id="g-search" type="text" placeholder="Filter by name…" />
+            </label>
+            <button id="g-load-btn" class="btn btn-primary g-load-btn" onclick="loadGraph()">
+              Load Graph
+            </button>
+          </div>
+
+          <div class="g-section" id="g-stats-section" style="display:none">
+            <h3 class="g-section-title">Stats</h3>
+            <div id="g-stats-content"></div>
+          </div>
+
+          <div class="g-section" id="g-filter-section" style="display:none">
+            <h3 class="g-section-title">Filter by type</h3>
+            <div id="g-type-filters"></div>
+          </div>
+
+          <div class="g-section" id="g-node-section" style="display:none">
+            <h3 class="g-section-title">Selected node</h3>
+            <div id="g-node-content"></div>
+          </div>
+
+        </aside>
+
+        <!-- Cytoscape canvas -->
+        <div class="graph-canvas-wrap">
+          <div id="cy"></div>
+          <div id="g-empty" class="g-canvas-empty">
+            Load the graph to start exploring
+          </div>
+          <div id="g-legend" class="g-legend" style="display:none"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Connectors page ─────────────────────────────────── -->
+    <section id="page-connectors" class="page">
+      <div class="page-header">
+        <h1>Connectors</h1>
+        <p class="subtitle">Configure data sources and trigger ingestion</p>
+      </div>
+
+      <div class="connector-grid">
+
+        <!-- PostgreSQL card -->
+        <div class="connector-card" id="card-postgres">
+          <div class="card-header">
+            <span class="db-icon">🐘</span>
+            <div>
+              <h2 class="card-title">PostgreSQL</h2>
+              <span class="card-badge">postgres</span>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <label>Host
+              <input id="pg-host" type="text" value="localhost" />
+            </label>
+            <label>Port
+              <input id="pg-port" type="number" value="5432" />
+            </label>
+            <label>Database
+              <input id="pg-db" type="text" value="contracts" />
+            </label>
+            <label>User
+              <input id="pg-user" type="text" value="lattice" />
+            </label>
+            <label class="full-width">Password
+              <input id="pg-pass" type="password" value="lattice123" />
+            </label>
+            <label class="full-width">Tables <small>(comma-separated, blank = all)</small>
+              <input id="pg-tables" type="text" placeholder="contracts, parties" />
+            </label>
+          </div>
+
+          <div class="card-actions">
+            <button class="btn btn-secondary" onclick="testConnector('postgres')">
+              Test Connection
+            </button>
+            <button class="btn btn-primary" onclick="runIngest('postgres')">
+              Run Ingest
+            </button>
+          </div>
+
+          <div id="pg-result" class="result-box hidden"></div>
+        </div>
+
+        <!-- MongoDB card -->
+        <div class="connector-card" id="card-mongo">
+          <div class="card-header">
+            <span class="db-icon">🍃</span>
+            <div>
+              <h2 class="card-title">MongoDB</h2>
+              <span class="card-badge">mongo</span>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <label>Host
+              <input id="mg-host" type="text" value="localhost" />
+            </label>
+            <label>Port
+              <input id="mg-port" type="number" value="27017" />
+            </label>
+            <label class="full-width">Database
+              <input id="mg-db" type="text" value="contracts_docs" />
+            </label>
+            <label class="full-width">Collections <small>(comma-separated, blank = all)</small>
+              <input id="mg-collections" type="text" placeholder="emails, memos" />
+            </label>
+          </div>
+
+          <div class="card-actions">
+            <button class="btn btn-secondary" onclick="testConnector('mongo')">
+              Test Connection
+            </button>
+            <button class="btn btn-primary" onclick="runIngest('mongo')">
+              Run Ingest
+            </button>
+          </div>
+
+          <div id="mg-result" class="result-box hidden"></div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Cytoscape.js — loaded only when graph page is opened -->
+  <script>
+    window._cytoscapeReady = false;
+    window._loadCytoscape  = function(cb) {
+      if (window._cytoscapeReady) { cb(); return; }
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js';
+      s.onload = () => { window._cytoscapeReady = true; cb(); };
+      document.head.appendChild(s);
+    };
+  </script>
+  <script src="app.js"></script>
+</body>
+</html>

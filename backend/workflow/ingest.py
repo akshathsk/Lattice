@@ -59,12 +59,13 @@ Usage
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator
 
 from dotenv import load_dotenv
 
@@ -200,6 +201,127 @@ class IngestPipeline:
         summary.elapsed_s = time.time() - t0
         logger.info("Ingest complete — %s", summary)
         return summary
+
+    def stream_run(
+        self,
+        source: str,
+        *,
+        tables:            list[str] | None     = None,
+        collections:       list[str] | None     = None,
+        query:             str | dict | None    = None,
+        normaliser_kwargs: dict[str, Any]       = {},
+    ) -> Generator[str, None, None]:
+        """
+        Like ``run()`` but yields SSE events (``data: {...}\\n\\n``) so callers
+        can stream live progress to the client.
+
+        Event types
+        -----------
+        {"t":"start",    "total": N, "source": "..."}
+        {"t":"progress", "current": i, "total": N,
+                         "collection": "...", "record_id": "...",
+                         "entities": N, "relations": N, "merged": N,
+                         "error": null|"...",
+                         "total_entities": N, "total_relations": N,
+                         "ok_chunks": N, "failed_chunks": N}
+        {"t":"reindex"}
+        {"t":"done",     "source": "...", "ok_chunks": N, ...}
+        {"t":"error",    "message": "..."}
+        """
+        def _sse(data: dict) -> str:
+            return f"data: {json.dumps(data)}\n\n"
+
+        logger.info("Ingest starting (stream) — source=%s", source)
+        t0 = time.time()
+
+        cfg = {**_source_config(source), **normaliser_kwargs}
+        normaliser = get_normaliser(source, **cfg)
+
+        if not normaliser.health_check():
+            yield _sse({"t": "error", "message": f"Source {source!r} not reachable — check connection"})
+            return
+
+        logger.info("Normalising %s …", source)
+        chunks = normaliser.normalise(
+            query       = query,
+            tables      = tables,
+            collections = collections,
+        )
+        logger.info("  %d chunks produced", len(chunks))
+
+        yield _sse({"t": "start", "total": len(chunks), "source": source})
+
+        summary = IngestSummary(source=source, total_chunks=len(chunks))
+
+        logger.info("Embedding %d chunks …", len(chunks))
+        embeddings = embed_chunks(chunks)
+
+        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings), 1):
+            logger.info(
+                "  [%d/%d] %s/%s#%s chunk=%d",
+                i, len(chunks),
+                chunk.source, chunk.collection, chunk.record_id, chunk.chunk_index,
+            )
+            cs = ChunkStats(
+                source     = chunk.source,
+                collection = chunk.collection,
+                record_id  = chunk.record_id,
+                entities   = 0,
+                relations  = 0,
+                merged     = 0,
+            )
+
+            try:
+                entities, relations, merged = self._process_one(chunk, embedding)
+                cs.entities  = len(entities)
+                cs.relations = len(relations)
+                cs.merged    = merged
+
+                summary.ok_chunks       += 1
+                summary.total_entities  += len(entities)
+                summary.total_relations += len(relations)
+                summary.total_merged    += merged
+
+            except Exception as e:
+                logger.exception("Chunk %s/%s failed: %s", chunk.collection, chunk.record_id, e)
+                cs.error = str(e)
+                summary.failed_chunks += 1
+
+            summary.chunk_stats.append(cs)
+
+            yield _sse({
+                "t":               "progress",
+                "current":         i,
+                "total":           len(chunks),
+                "collection":      chunk.collection,
+                "record_id":       str(chunk.record_id),
+                "entities":        cs.entities,
+                "relations":       cs.relations,
+                "merged":          cs.merged,
+                "error":           cs.error,
+                "total_entities":  summary.total_entities,
+                "total_relations": summary.total_relations,
+                "ok_chunks":       summary.ok_chunks,
+                "failed_chunks":   summary.failed_chunks,
+            })
+
+        # Rebuild vector indexes
+        yield _sse({"t": "reindex"})
+        self._graph.create_indexes(rebuild=True)
+
+        summary.elapsed_s = time.time() - t0
+        logger.info("Ingest complete — %s", summary)
+
+        yield _sse({
+            "t":               "done",
+            "source":          summary.source,
+            "ok_chunks":       summary.ok_chunks,
+            "failed_chunks":   summary.failed_chunks,
+            "total_entities":  summary.total_entities,
+            "total_relations": summary.total_relations,
+            "total_merged":    summary.total_merged,
+            "elapsed_s":       round(summary.elapsed_s, 1),
+        })
 
     def run_all(self) -> dict[str, IngestSummary]:
         """
