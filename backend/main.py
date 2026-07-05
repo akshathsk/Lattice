@@ -3,14 +3,20 @@ Lattice — FastAPI application.
 
 Endpoints
 ---------
-POST /chat                    Stream a GPT-4o answer grounded in graph context.
-GET  /graph/schema            Current entity types + relation types.
-GET  /graph/stats             Node and edge counts.
-POST /graph/reindex           Rebuild HNSW vector indexes.
-GET  /connectors/defaults     Connection defaults read from environment.
-POST /connectors/{source}/test  Test a connector with optional config overrides.
-POST /ingest/{source}         Trigger ingest (accepts connection overrides + auto-reindexes).
-GET  /health                  Liveness check.
+POST /chat                          Stream a GPT-4o answer grounded in graph context.
+GET  /graph/data                    Entity nodes + edges for visualisation.
+GET  /graph/schema                  Current entity types + relation types.
+GET  /graph/stats                   Node and edge counts.
+POST /graph/reindex                 Rebuild HNSW vector indexes.
+GET  /connectors/defaults           Connection defaults from environment.
+POST /connectors/{source}/test      Test postgres | mongo | mysql | elasticsearch.
+POST /connectors/rest/test          Test a REST API endpoint.
+POST /connectors/s3/test            Test an S3 bucket.
+POST /ingest/{source}               Ingest from postgres | mongo | mysql | elasticsearch.
+POST /ingest/file                   Ingest uploaded files (multipart).
+POST /ingest/rest                   Ingest from a REST API endpoint.
+POST /ingest/s3                     Ingest from an S3 bucket.
+GET  /health                        Liveness check.
 
 Run
 ---
@@ -22,11 +28,13 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -58,7 +66,7 @@ def _chatbot():
 app = FastAPI(
     title       = "Lattice API",
     description = "Knowledge-graph RAG API",
-    version     = "0.1.0",
+    version     = "0.2.0",
 )
 
 app.add_middleware(
@@ -78,29 +86,56 @@ class ChatRequest(BaseModel):
 
 
 class ConnectorConfig(BaseModel):
-    """
-    Optional connection overrides for a data source.
-    Any field left as None falls back to the environment variable default.
-    """
+    """Optional connection overrides — any field left as None falls back to env defaults."""
     host:     str | None = None
     port:     int | None = None
-    database: str | None = None   # mongo
-    dbname:   str | None = None   # postgres
+    database: str | None = None   # mongo / elasticsearch index
+    dbname:   str | None = None   # postgres / mysql
     user:     str | None = None
     password: str | None = None
 
 
 class IngestRequest(BaseModel):
-    tables:      list[str]     | None = None   # postgres — specific tables
-    collections: list[str]     | None = None   # mongo — specific collections
-    query:       str           | None = None   # optional source filter
-    connection:  ConnectorConfig      = ConnectorConfig()
+    tables:      list[str]      | None = None
+    collections: list[str]      | None = None
+    query:       str            | None = None
+    connection:  ConnectorConfig       = ConnectorConfig()
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+class RestTestRequest(BaseModel):
+    url:         str
+    method:      str        = "GET"
+    auth_header: str | None = None
+
+
+class RestIngestRequest(BaseModel):
+    url:         str
+    method:      str        = "GET"
+    auth_header: str | None = None
+    json_path:   str | None = None
+
+
+class S3TestRequest(BaseModel):
+    bucket:     str
+    region:     str        = "us-east-1"
+    access_key: str | None = None
+    secret_key: str | None = None
+
+
+class S3IngestRequest(BaseModel):
+    bucket:     str
+    prefix:     str        = ""
+    region:     str        = "us-east-1"
+    access_key: str | None = None
+    secret_key: str | None = None
+
+
+# ── connection helpers ────────────────────────────────────────────────────────
+
+_DB_SOURCES = ("postgres", "mongo", "mysql", "elasticsearch")
+
 
 def _env_defaults(source: str) -> dict:
-    """Return the environment-variable defaults for a source."""
     if source == "postgres":
         return {
             "host":     os.getenv("POSTGRES_HOST",     "localhost"),
@@ -115,14 +150,34 @@ def _env_defaults(source: str) -> dict:
             "port":     int(os.getenv("MONGO_PORT", "27017")),
             "database": os.getenv("MONGO_DB",       "contracts_docs"),
         }
+    if source == "mysql":
+        return {
+            "host":     os.getenv("MYSQL_HOST",     "localhost"),
+            "port":     int(os.getenv("MYSQL_PORT", "3306")),
+            "dbname":   os.getenv("MYSQL_DB",       ""),
+            "user":     os.getenv("MYSQL_USER",     ""),
+            "password": os.getenv("MYSQL_PASSWORD", ""),
+        }
+    if source == "elasticsearch":
+        return {
+            "host":     os.getenv("ES_HOST",     "localhost"),
+            "port":     int(os.getenv("ES_PORT", "9200")),
+            "user":     os.getenv("ES_USER",     ""),
+            "password": os.getenv("ES_PASSWORD", ""),
+            "index":    os.getenv("ES_INDEX",    ""),
+        }
     raise ValueError(f"Unknown source {source!r}")
 
 
 def _merge_config(source: str, cfg: ConnectorConfig) -> dict:
-    """Merge env defaults with any non-None overrides from the request."""
+    """Merge env defaults with non-None overrides from the request."""
     base     = _env_defaults(source)
     override = {k: v for k, v in cfg.model_dump().items() if v is not None}
-    return {**base, **override}
+    merged   = {**base, **override}
+    # elasticsearch: ConnectorConfig.database → normaliser kwarg 'index'
+    if source == "elasticsearch" and "database" in merged:
+        merged["index"] = merged.pop("database")
+    return merged
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
@@ -137,12 +192,7 @@ def health():
 
 @app.post("/chat")
 def chat(req: ChatRequest):
-    """Stream a GPT-4o answer grounded in knowledge-graph context.
-
-    Normal mode  — yields raw text tokens.
-    Debug mode   — yields SSE events (data: {...}\\n\\n) for each pipeline step,
-                   then token events, then a done event.
-    """
+    """Stream a GPT-4o answer.  debug=true adds pipeline step events."""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="query must not be empty")
 
@@ -186,21 +236,12 @@ def graph_stats():
 
 @app.post("/graph/reindex")
 def reindex():
-    """Rebuild HNSW vector indexes — call after bulk ingest."""
     _graph().create_indexes(rebuild=True)
     return {"status": "ok", "message": "Vector indexes rebuilt"}
 
 
 @app.get("/graph/data")
 def graph_data(limit: int = 300):
-    """
-    Return Entity nodes and their relationships for graph visualisation.
-
-    Parameters
-    ----------
-    limit : Maximum number of Entity nodes to return (default 300).
-            Edges are capped at 5 × limit.
-    """
     g = _graph()._graph
     node_res = g.query(
         "MATCH (n:Entity) RETURN n.id, n.name, n.type LIMIT $limit",
@@ -211,14 +252,8 @@ def graph_data(limit: int = 300):
         {"elimit": limit * 5},
     )
     return {
-        "nodes": [
-            {"id": r[0], "name": r[1], "type": r[2]}
-            for r in node_res.result_set
-        ],
-        "edges": [
-            {"src": r[0], "type": r[1], "dst": r[2]}
-            for r in edge_res.result_set
-        ],
+        "nodes": [{"id": r[0], "name": r[1], "type": r[2]} for r in node_res.result_set],
+        "edges": [{"src": r[0], "type": r[1], "dst": r[2]} for r in edge_res.result_set],
     }
 
 
@@ -226,39 +261,56 @@ def graph_data(limit: int = 300):
 
 @app.get("/connectors/defaults")
 def connector_defaults():
-    """
-    Return the current connection defaults (from env vars) for each source.
-    Passwords are omitted so the UI can pre-fill non-sensitive fields.
-    """
+    """Return non-sensitive connection defaults for the UI to pre-fill."""
     pg    = _env_defaults("postgres")
     mongo = _env_defaults("mongo")
     return {
-        "postgres": {
-            "host":     pg["host"],
-            "port":     pg["port"],
-            "database": pg["dbname"],
-            "user":     pg["user"],
-        },
-        "mongo": {
-            "host":     mongo["host"],
-            "port":     mongo["port"],
-            "database": mongo["database"],
-        },
+        "postgres": {"host": pg["host"], "port": pg["port"], "database": pg["dbname"], "user": pg["user"]},
+        "mongo":    {"host": mongo["host"], "port": mongo["port"], "database": mongo["database"]},
     }
+
+
+@app.post("/connectors/rest/test")
+def test_rest_connector(req: RestTestRequest):
+    """Test a REST API endpoint is reachable."""
+    from normalise.rest_api import RestApiNormaliser
+    try:
+        n  = RestApiNormaliser(url=req.url, method=req.method, auth_header=req.auth_header)
+        ok = n.health_check()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=503, detail="Endpoint not reachable or returned 5xx")
+    return {"ok": True}
+
+
+@app.post("/connectors/s3/test")
+def test_s3_connector(req: S3TestRequest):
+    """Test S3 bucket access."""
+    from normalise.s3 import S3Normaliser
+    try:
+        n  = S3Normaliser(bucket=req.bucket, region=req.region,
+                          access_key=req.access_key, secret_key=req.secret_key)
+        ok = n.health_check()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=503, detail="Bucket not accessible")
+    return {"ok": True}
 
 
 @app.post("/connectors/{source}/test")
 def test_connector(source: str, cfg: ConnectorConfig = ConnectorConfig()):
-    """Test a connector with optional config overrides."""
+    """Test a database connector (postgres | mongo | mysql | elasticsearch)."""
     from normalise import get_normaliser
 
-    if source not in ("postgres", "mongo"):
+    if source not in _DB_SOURCES:
         raise HTTPException(status_code=400, detail=f"Unknown source {source!r}")
 
     merged = _merge_config(source, cfg)
     try:
         normaliser = get_normaliser(source, **merged)
-        ok = normaliser.health_check()
+        ok         = normaliser.health_check()
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
 
@@ -269,20 +321,95 @@ def test_connector(source: str, cfg: ConnectorConfig = ConnectorConfig()):
 
 # ── ingest ────────────────────────────────────────────────────────────────────
 
+@app.post("/ingest/file")
+async def ingest_file(files: list[UploadFile] = File(...)):
+    """
+    Ingest uploaded documents — streams SSE progress events.
+    Accepted: .txt .md .pdf .docx .csv .json
+    """
+    import json as _json
+    from normalise.file  import FileNormaliser
+    from workflow.ingest import IngestPipeline
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="lattice_upload_"))
+    saved: list[str] = []
+    for f in files:
+        dest = tmp_dir / (f.filename or "upload")
+        with open(dest, "wb") as fh:
+            shutil.copyfileobj(f.file, fh)
+        saved.append(str(dest))
+
+    def _stream():
+        try:
+            normaliser = FileNormaliser(file_paths=saved)
+            pipeline   = IngestPipeline(graph=_graph())
+            yield from pipeline.stream_run_normaliser(normaliser, source="file")
+        except Exception as e:
+            logger.exception("File ingest error: %s", e)
+            yield f"data: {_json.dumps({'t': 'error', 'message': str(e)})}\n\n"
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+@app.post("/ingest/rest")
+def ingest_rest(req: RestIngestRequest):
+    """Ingest from a REST API endpoint — streams SSE progress events."""
+    import json as _json
+    from normalise.rest_api import RestApiNormaliser
+    from workflow.ingest    import IngestPipeline
+
+    def _stream():
+        try:
+            normaliser = RestApiNormaliser(
+                url=req.url, method=req.method,
+                auth_header=req.auth_header, json_path=req.json_path,
+            )
+            pipeline = IngestPipeline(graph=_graph())
+            yield from pipeline.stream_run_normaliser(normaliser, source="rest")
+        except Exception as e:
+            logger.exception("REST ingest error: %s", e)
+            yield f"data: {_json.dumps({'t': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+@app.post("/ingest/s3")
+def ingest_s3(req: S3IngestRequest):
+    """Ingest from an S3 bucket — streams SSE progress events."""
+    import json as _json
+    from normalise.s3    import S3Normaliser
+    from workflow.ingest import IngestPipeline
+
+    def _stream():
+        try:
+            normaliser = S3Normaliser(
+                bucket=req.bucket, prefix=req.prefix,
+                region=req.region, access_key=req.access_key, secret_key=req.secret_key,
+            )
+            pipeline = IngestPipeline(graph=_graph())
+            yield from pipeline.stream_run_normaliser(normaliser, source="s3")
+        except Exception as e:
+            logger.exception("S3 ingest error: %s", e)
+            yield f"data: {_json.dumps({'t': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
 @app.post("/ingest/{source}")
 def ingest(source: str, req: IngestRequest = IngestRequest()):
     """
-    Trigger ingest from a data source — streams SSE progress events.
-
-    Events: start → progress (one per chunk) → reindex → done | error
-
-    Accepts optional connection overrides — any field not supplied falls back
-    to the environment variable default.
+    Ingest from a database source — streams SSE progress events.
+    Supported: postgres | mongo | mysql | elasticsearch
     """
     import json as _json
     from workflow.ingest import IngestPipeline
 
-    if source not in ("postgres", "mongo"):
+    if source not in _DB_SOURCES:
         raise HTTPException(status_code=400, detail=f"Unknown source {source!r}")
 
     normaliser_kwargs = _merge_config(source, req.connection)

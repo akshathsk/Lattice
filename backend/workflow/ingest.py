@@ -323,6 +323,92 @@ class IngestPipeline:
             "elapsed_s":       round(summary.elapsed_s, 1),
         })
 
+    def stream_run_normaliser(
+        self,
+        normaliser,
+        source: str,
+    ) -> Generator[str, None, None]:
+        """
+        Like ``stream_run()`` but accepts a pre-built normaliser instance
+        instead of a source string.  Used for file uploads, REST API, and S3.
+        """
+        def _sse(data: dict) -> str:
+            return f"data: {json.dumps(data)}\n\n"
+
+        logger.info("Ingest starting (stream, pre-built normaliser) — source=%s", source)
+        t0 = time.time()
+
+        logger.info("Normalising %s …", source)
+        chunks = normaliser.normalise()
+        logger.info("  %d chunks produced", len(chunks))
+
+        yield _sse({"t": "start", "total": len(chunks), "source": source})
+        summary = IngestSummary(source=source, total_chunks=len(chunks))
+
+        logger.info("Embedding %d chunks …", len(chunks))
+        embeddings = embed_chunks(chunks)
+
+        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings), 1):
+            logger.info(
+                "  [%d/%d] %s/%s#%s chunk=%d",
+                i, len(chunks),
+                chunk.source, chunk.collection, chunk.record_id, chunk.chunk_index,
+            )
+            cs = ChunkStats(
+                source     = chunk.source,
+                collection = chunk.collection,
+                record_id  = chunk.record_id,
+                entities   = 0,
+                relations  = 0,
+                merged     = 0,
+            )
+            try:
+                entities, relations, merged = self._process_one(chunk, embedding)
+                cs.entities  = len(entities)
+                cs.relations = len(relations)
+                cs.merged    = merged
+                summary.ok_chunks       += 1
+                summary.total_entities  += len(entities)
+                summary.total_relations += len(relations)
+                summary.total_merged    += merged
+            except Exception as e:
+                logger.exception("Chunk %s/%s failed: %s", chunk.collection, chunk.record_id, e)
+                cs.error = str(e)
+                summary.failed_chunks += 1
+
+            summary.chunk_stats.append(cs)
+            yield _sse({
+                "t":               "progress",
+                "current":         i,
+                "total":           len(chunks),
+                "collection":      chunk.collection,
+                "record_id":       str(chunk.record_id),
+                "entities":        cs.entities,
+                "relations":       cs.relations,
+                "merged":          cs.merged,
+                "error":           cs.error,
+                "total_entities":  summary.total_entities,
+                "total_relations": summary.total_relations,
+                "ok_chunks":       summary.ok_chunks,
+                "failed_chunks":   summary.failed_chunks,
+            })
+
+        yield _sse({"t": "reindex"})
+        self._graph.create_indexes(rebuild=True)
+
+        summary.elapsed_s = time.time() - t0
+        logger.info("Ingest complete — %s", summary)
+        yield _sse({
+            "t":               "done",
+            "source":          summary.source,
+            "ok_chunks":       summary.ok_chunks,
+            "failed_chunks":   summary.failed_chunks,
+            "total_entities":  summary.total_entities,
+            "total_relations": summary.total_relations,
+            "total_merged":    summary.total_merged,
+            "elapsed_s":       round(summary.elapsed_s, 1),
+        })
+
     def run_all(self) -> dict[str, IngestSummary]:
         """
         Ingest all configured sources (postgres + mongo).
@@ -456,4 +542,14 @@ def _source_config(source: str) -> dict[str, Any]:
             "port":     int(os.getenv("MONGO_PORT", "27017")),
             "database": os.getenv("MONGO_DB",       "contracts_docs"),
         }
-    raise ValueError(f"Unknown source {source!r}. Supported: postgres, mongo")
+    if source == "mysql":
+        return {
+            "host":     os.getenv("MYSQL_HOST",     "localhost"),
+            "port":     int(os.getenv("MYSQL_PORT", "3306")),
+            "dbname":   os.getenv("MYSQL_DB",       ""),
+            "user":     os.getenv("MYSQL_USER",     ""),
+            "password": os.getenv("MYSQL_PASSWORD", ""),
+        }
+    if source in ("file", "elasticsearch", "rest", "s3"):
+        return {}  # all params passed entirely via normaliser_kwargs
+    raise ValueError(f"Unknown source {source!r}. Supported: postgres, mongo, mysql, elasticsearch, rest, s3, file")
