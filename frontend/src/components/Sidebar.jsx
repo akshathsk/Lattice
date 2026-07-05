@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { MessageSquare, Network, Plug2 } from 'lucide-react'
+import { Home, MessageSquare, Network, Plug2 } from 'lucide-react'
 
 const NAV = [
+  { id: 'home',       label: 'Home',       Icon: Home },
   { id: 'chat',       label: 'Chat',       Icon: MessageSquare },
   { id: 'graph',      label: 'Graph',      Icon: Network },
   { id: 'connectors', label: 'Connectors', Icon: Plug2 },
@@ -11,19 +12,28 @@ export default function Sidebar({ page, setPage, apiUrl, setApiUrl, health }) {
   return (
     <aside className="w-56 flex-shrink-0 flex flex-col bg-surface border-r border-border">
       {/* Logo */}
-      <div className="px-5 pt-7 pb-6">
+      <div className="px-4 pt-6 pb-5">
         <div className="flex items-center gap-2.5">
-          <span
-            className="text-2xl font-black leading-none"
-            style={{ background: 'linear-gradient(135deg, #7c5cfc, #c084fc)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
-          >◈</span>
-          <span className="text-[15px] font-semibold tracking-tight text-slate-100">Lattice</span>
+          <div className="relative">
+            <span
+              className="text-[22px] font-black leading-none"
+              style={{ background: 'linear-gradient(135deg, #7c5cfc, #c084fc)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
+            >◈</span>
+            <span
+              className="absolute inset-0 text-[22px] font-black leading-none blur-md opacity-50 select-none"
+              style={{ background: 'linear-gradient(135deg, #7c5cfc, #c084fc)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
+              aria-hidden="true"
+            >◈</span>
+          </div>
+          <div>
+            <span className="text-[15px] font-semibold tracking-tight text-slate-100">Lattice</span>
+          </div>
         </div>
-        <p className="text-[11px] text-slate-600 mt-1.5 ml-0.5">Knowledge Graph</p>
+        <p className="text-[11px] text-slate-700 mt-2 ml-0.5 tracking-wide">Knowledge Graph</p>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 space-y-0.5">
+      <nav className="flex-1 px-2 space-y-0.5">
         {NAV.map(({ id, label, Icon }) => {
           const active = page === id
           return (
@@ -31,15 +41,18 @@ export default function Sidebar({ page, setPage, apiUrl, setApiUrl, health }) {
               key={id}
               onClick={() => setPage(id)}
               className={`
-                w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium
+                relative w-full flex items-center gap-3 pl-4 pr-3 py-2.5 rounded-xl text-[13px] font-medium
                 transition-all duration-150 text-left
                 ${active
-                  ? 'bg-accent/15 text-accent-2 border border-accent/20'
-                  : 'text-slate-500 hover:text-slate-300 hover:bg-white/5 border border-transparent'
+                  ? 'bg-accent/12 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]'
+                  : 'text-slate-500 hover:text-slate-300 hover:bg-white/4 border border-transparent'
                 }
               `}
             >
-              <Icon size={15} className={active ? 'text-accent-2' : ''} />
+              {active && (
+                <span className="absolute left-1.5 top-2.5 bottom-2.5 w-0.5 rounded-full bg-accent" />
+              )}
+              <Icon size={15} className={active ? 'text-accent' : ''} />
               {label}
             </button>
           )

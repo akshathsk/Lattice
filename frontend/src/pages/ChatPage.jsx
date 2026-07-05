@@ -110,17 +110,17 @@ export default function ChatPage({ apiUrl }) {
   return (
     <div className="flex flex-col h-full">
       {/* ── Header ── */}
-      <header className="flex items-center justify-between px-8 py-5 border-b border-border flex-shrink-0">
+      <header className="flex items-center justify-between px-8 py-4 border-b border-border flex-shrink-0 bg-surface/40 backdrop-blur-sm">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">Ask Lattice</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Query your knowledge graph with natural language</p>
+          <h1 className="text-[15px] font-semibold text-slate-100 tracking-tight">Ask Lattice</h1>
+          <p className="text-[11px] text-slate-600 mt-0.5">Query your knowledge graph with natural language</p>
         </div>
         <DebugToggle value={debugMode} onChange={setDebugMode} />
       </header>
 
       {/* ── Messages ── */}
       <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
-        {messages.length === 0 && <EmptyState />}
+        {messages.length === 0 && <EmptyState onSelect={q => { setInput(q); setTimeout(() => textareaRef.current?.focus(), 0) }} />}
         {messages.map(msg =>
           msg.role === 'user'
             ? <UserMessage key={msg.id} msg={msg} />
@@ -178,14 +178,46 @@ function patchLast(msgs, id, fn) {
 
 // ── Sub-components ───────────────────────────────────────────────────────────
 
-function EmptyState() {
+const SUGGESTIONS = [
+  { icon: '✦', text: 'What entities are in the knowledge graph?' },
+  { icon: '↗', text: 'Which entities have the most connections?' },
+  { icon: '◎', text: 'Summarize the key relationships and themes' },
+  { icon: '⊞', text: 'What types of data have been ingested?' },
+]
+
+function EmptyState({ onSelect }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-center py-20">
-      <div
-        className="text-5xl font-black opacity-10 select-none"
-        style={{ background: 'linear-gradient(135deg,#7c5cfc,#c084fc)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
-      >◈</div>
-      <p className="text-sm text-slate-600">Ask anything about your ingested data</p>
+    <div className="flex flex-col items-center justify-center h-full gap-8 text-center py-12">
+      <div className="space-y-4">
+        <div className="relative inline-block">
+          <div
+            className="text-[56px] font-black select-none leading-none"
+            style={{ background: 'linear-gradient(135deg, #7c5cfc 0%, #c084fc 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
+          >◈</div>
+          <div
+            className="absolute inset-0 text-[56px] font-black select-none leading-none blur-2xl opacity-30"
+            style={{ background: 'linear-gradient(135deg, #7c5cfc 0%, #c084fc 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
+            aria-hidden="true"
+          >◈</div>
+        </div>
+        <div>
+          <h2 className="text-xl font-semibold text-slate-200 tracking-tight">Ask your knowledge graph</h2>
+          <p className="text-sm text-slate-500 mt-1.5">Query ingested data with natural language</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2.5 w-full max-w-lg">
+        {SUGGESTIONS.map(({ icon, text }) => (
+          <button
+            key={text}
+            onClick={() => onSelect(text)}
+            className="group flex items-start gap-2.5 text-left px-4 py-3.5 rounded-2xl bg-card/80 border border-border hover:border-accent/35 hover:bg-accent/5 transition-all duration-200"
+          >
+            <span className="text-slate-600 group-hover:text-accent text-sm mt-0.5 transition-colors flex-shrink-0 font-mono">{icon}</span>
+            <span className="text-[13px] text-slate-500 group-hover:text-slate-300 transition-colors leading-snug">{text}</span>
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -202,20 +234,26 @@ function UserMessage({ msg }) {
 
 function AssistantMessage({ msg }) {
   return (
-    <div className="flex flex-col gap-3 max-w-3xl">
-      {/* Debug trace — shown before answer */}
-      {msg.debug && msg.steps.length > 0 && (
-        <DebugTrace steps={msg.steps} />
-      )}
-      {/* Answer bubble */}
-      <div className={`
-        bg-card border rounded-2xl rounded-bl-md px-4 py-3 text-sm
-        ${msg.error ? 'border-red-500/30 text-red-400' : 'border-border text-slate-200'}
-      `}>
-        {msg.content
-          ? <span className="msg-text">{msg.content}</span>
-          : <TypingDots />
-        }
+    <div className="flex items-start gap-3 max-w-3xl">
+      <div
+        className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 text-[13px] font-black select-none"
+        style={{ background: 'linear-gradient(135deg, rgba(124,92,252,0.25), rgba(192,132,252,0.15))', border: '1px solid rgba(124,92,252,0.25)', color: '#9d7dff' }}
+      >◈</div>
+      <div className="flex-1 flex flex-col gap-3 min-w-0">
+        {/* Debug trace — shown before answer */}
+        {msg.debug && msg.steps.length > 0 && (
+          <DebugTrace steps={msg.steps} />
+        )}
+        {/* Answer bubble */}
+        <div className={`
+          bg-card border rounded-2xl rounded-tl-sm px-4 py-3 text-sm
+          ${msg.error ? 'border-red-500/30 text-red-400' : 'border-border text-slate-200'}
+        `}>
+          {msg.content
+            ? <span className="msg-text">{msg.content}</span>
+            : <TypingDots />
+          }
+        </div>
       </div>
     </div>
   )

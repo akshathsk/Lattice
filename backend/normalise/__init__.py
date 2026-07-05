@@ -32,17 +32,27 @@ Quick start
     )
 """
 
-from .base     import BaseNormaliser
-from .chunker  import chunk_text, chunk_record, DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP
-from .models   import NormalisedChunk
-from .postgres import PostgresNormaliser
-from .mongo    import MongoNormaliser
+from .base          import BaseNormaliser
+from .chunker       import chunk_text, chunk_record, DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP
+from .models        import NormalisedChunk
+from .postgres      import PostgresNormaliser
+from .mongo         import MongoNormaliser
+from .file          import FileNormaliser
+from .mysql         import MySQLNormaliser
+from .elasticsearch import ElasticsearchNormaliser
+from .rest_api      import RestApiNormaliser
+from .s3            import S3Normaliser
 
 __all__ = [
     "BaseNormaliser",
     "NormalisedChunk",
     "PostgresNormaliser",
     "MongoNormaliser",
+    "FileNormaliser",
+    "MySQLNormaliser",
+    "ElasticsearchNormaliser",
+    "RestApiNormaliser",
+    "S3Normaliser",
     "get_normaliser",
     "chunk_text",
     "chunk_record",
@@ -53,24 +63,22 @@ __all__ = [
 
 def get_normaliser(source: str, **kwargs) -> BaseNormaliser:
     """
-    Factory function — return the right normaliser for *source*.
+    Factory — return the right normaliser for *source*.
 
-    Parameters
-    ----------
-    source : ``"postgres"`` | ``"mongo"``
-    **kwargs : Passed directly to the normaliser's ``__init__``.
-
-    Raises
-    ------
-    ValueError if *source* is not recognised.
+    source : ``"postgres"`` | ``"mongo"`` | ``"file"`` |
+             ``"mysql"``   | ``"elasticsearch"`` |
+             ``"rest"``    | ``"s3"``
     """
     registry: dict[str, type[BaseNormaliser]] = {
-        "postgres": PostgresNormaliser,
-        "mongo":    MongoNormaliser,
+        "postgres":      PostgresNormaliser,
+        "mongo":         MongoNormaliser,
+        "file":          FileNormaliser,
+        "mysql":         MySQLNormaliser,
+        "elasticsearch": ElasticsearchNormaliser,
+        "rest":          RestApiNormaliser,
+        "s3":            S3Normaliser,
     }
     key = source.lower().strip()
     if key not in registry:
-        raise ValueError(
-            f"Unknown source {source!r}. Available: {sorted(registry)}"
-        )
+        raise ValueError(f"Unknown source {source!r}. Available: {sorted(registry)}")
     return registry[key](**kwargs)

@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { CheckCircle, XCircle, Loader2, Database, Upload, FileText, ChevronDown, ChevronUp } from 'lucide-react'
+import { CheckCircle, XCircle, Loader2, Database, Upload, FileText, ChevronDown, ChevronUp, ArrowRight, PlusCircle } from 'lucide-react'
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
-export default function ConnectorsPage({ apiUrl }) {
+export default function ConnectorsPage({ apiUrl, setPage }) {
   const [pgConfig, setPgConfig] = useState({
     host: 'localhost', port: '5432', dbname: 'contracts',
     user: 'lattice', password: 'lattice123', tables: '',
@@ -23,8 +23,17 @@ export default function ConnectorsPage({ apiUrl }) {
   const [s3Config, setS3Config] = useState({
     bucket: '', prefix: '', region: 'us-east-1', access_key: '', secret_key: '',
   })
+  const [graphStats, setGraphStats] = useState(null)
+
+  const reloadStats = useCallback(() => {
+    fetch(`${apiUrl}/graph/stats`)
+      .then(r => r.json())
+      .then(setGraphStats)
+      .catch(() => {})
+  }, [apiUrl])
 
   useEffect(() => {
+    reloadStats()
     fetch(`${apiUrl}/connectors/defaults`)
       .then(r => r.json())
       .then(d => {
@@ -45,28 +54,38 @@ export default function ConnectorsPage({ apiUrl }) {
       .catch(() => {})
   }, [apiUrl])
 
+  const totalNodes = graphStats?.nodes?.reduce((s, n) => s + n.count, 0) ?? 0
+  const totalEdges = graphStats?.edges?.reduce((s, e) => s + e.count, 0) ?? 0
+  const hasData    = totalNodes > 0
+
   return (
     <div className="overflow-y-auto h-full">
       <div className="px-8 py-6 max-w-5xl mx-auto space-y-8">
 
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">Connectors</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Configure data sources and trigger ingestion into the knowledge graph</p>
+          <h1 className="text-[15px] font-semibold text-slate-100 tracking-tight">Data Sources</h1>
+          <p className="text-[11px] text-slate-600 mt-0.5">Connect as many sources as you need — each one ingests independently into the same graph</p>
         </div>
+
+        {/* Pipeline banner */}
+        <PipelineBanner
+          totalNodes={totalNodes} totalEdges={totalEdges}
+          hasData={hasData} setPage={setPage} onRefresh={reloadStats}
+        />
 
         {/* File upload */}
         <section>
-          <SectionLabel>Upload Documents</SectionLabel>
-          <FileUploadCard apiUrl={apiUrl} />
+          <SectionLabel icon="↑">Upload Documents</SectionLabel>
+          <FileUploadCard apiUrl={apiUrl} onIngestDone={reloadStats} />
         </section>
 
         {/* Databases */}
         <section>
-          <SectionLabel>Databases</SectionLabel>
+          <SectionLabel icon="⊟">Databases</SectionLabel>
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
 
             <DbConnectorCard
-              title="PostgreSQL" source="postgres" apiUrl={apiUrl}
+              title="PostgreSQL" source="postgres" color="#336791" apiUrl={apiUrl}
               fields={[
                 { id: 'host',     label: 'Host',     type: 'text',     half: true },
                 { id: 'port',     label: 'Port',     type: 'number',   half: true },
@@ -76,6 +95,7 @@ export default function ConnectorsPage({ apiUrl }) {
                 { id: 'tables',   label: 'Tables',   type: 'text',     hint: 'comma-separated, blank = all' },
               ]}
               config={pgConfig} setConfig={setPgConfig}
+              onIngestDone={reloadStats}
               buildBody={cfg => {
                 const body = { connection: clean({ host: cfg.host, port: num(cfg.port), dbname: cfg.dbname, user: cfg.user, password: cfg.password }) }
                 const t = csv(cfg.tables); if (t.length) body.tables = t
@@ -84,7 +104,7 @@ export default function ConnectorsPage({ apiUrl }) {
             />
 
             <DbConnectorCard
-              title="MongoDB" source="mongo" apiUrl={apiUrl}
+              title="MongoDB" source="mongo" color="#589636" apiUrl={apiUrl}
               fields={[
                 { id: 'host',        label: 'Host',        type: 'text',   half: true },
                 { id: 'port',        label: 'Port',        type: 'number', half: true },
@@ -92,6 +112,7 @@ export default function ConnectorsPage({ apiUrl }) {
                 { id: 'collections', label: 'Collections', type: 'text',   hint: 'comma-separated, blank = all' },
               ]}
               config={mgConfig} setConfig={setMgConfig}
+              onIngestDone={reloadStats}
               buildBody={cfg => {
                 const body = { connection: clean({ host: cfg.host, port: num(cfg.port), database: cfg.database }) }
                 const c = csv(cfg.collections); if (c.length) body.collections = c
@@ -100,7 +121,7 @@ export default function ConnectorsPage({ apiUrl }) {
             />
 
             <DbConnectorCard
-              title="MySQL" source="mysql" apiUrl={apiUrl}
+              title="MySQL" source="mysql" color="#00758F" apiUrl={apiUrl}
               fields={[
                 { id: 'host',     label: 'Host',     type: 'text',     half: true },
                 { id: 'port',     label: 'Port',     type: 'number',   half: true },
@@ -110,6 +131,7 @@ export default function ConnectorsPage({ apiUrl }) {
                 { id: 'tables',   label: 'Tables',   type: 'text',     hint: 'comma-separated, blank = all' },
               ]}
               config={myConfig} setConfig={setMyConfig}
+              onIngestDone={reloadStats}
               buildBody={cfg => {
                 const body = { connection: clean({ host: cfg.host, port: num(cfg.port), dbname: cfg.dbname, user: cfg.user, password: cfg.password }) }
                 const t = csv(cfg.tables); if (t.length) body.tables = t
@@ -118,7 +140,7 @@ export default function ConnectorsPage({ apiUrl }) {
             />
 
             <DbConnectorCard
-              title="Elasticsearch" source="elasticsearch" apiUrl={apiUrl}
+              title="Elasticsearch" source="elasticsearch" color="#FEC514" apiUrl={apiUrl}
               fields={[
                 { id: 'host',     label: 'Host',           type: 'text',     half: true },
                 { id: 'port',     label: 'Port',           type: 'number',   half: true },
@@ -127,6 +149,7 @@ export default function ConnectorsPage({ apiUrl }) {
                 { id: 'index',    label: 'Index',          type: 'text',     hint: 'blank = all non-system indices' },
               ]}
               config={esConfig} setConfig={setEsConfig}
+              onIngestDone={reloadStats}
               buildBody={cfg => ({
                 connection: clean({ host: cfg.host, port: num(cfg.port), user: cfg.user, password: cfg.password, database: cfg.index }),
               })}
@@ -137,11 +160,11 @@ export default function ConnectorsPage({ apiUrl }) {
 
         {/* APIs & Cloud */}
         <section>
-          <SectionLabel>APIs &amp; Cloud</SectionLabel>
+          <SectionLabel icon="↗">APIs &amp; Cloud</SectionLabel>
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
 
-            <RestConnectorCard apiUrl={apiUrl} config={restConfig} setConfig={setRestConfig} />
-            <S3ConnectorCard   apiUrl={apiUrl} config={s3Config}   setConfig={setS3Config} />
+            <RestConnectorCard apiUrl={apiUrl} config={restConfig} setConfig={setRestConfig} onIngestDone={reloadStats} />
+            <S3ConnectorCard   apiUrl={apiUrl} config={s3Config}   setConfig={setS3Config}   onIngestDone={reloadStats} />
 
           </div>
         </section>
@@ -153,11 +176,90 @@ export default function ConnectorsPage({ apiUrl }) {
 
 // ── Section label ─────────────────────────────────────────────────────────────
 
-function SectionLabel({ children }) {
+function SectionLabel({ children, icon }) {
   return (
-    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-600 mb-3">
-      {children}
-    </p>
+    <div className="flex items-center gap-2.5 mb-3">
+      {icon && <span className="font-mono text-accent text-[13px]">{icon}</span>}
+      <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">
+        {children}
+      </p>
+      <div className="flex-1 h-px bg-border" />
+    </div>
+  )
+}
+
+// ── Pipeline banner ───────────────────────────────────────────────────────────
+
+const PIPE_SOURCES = [
+  { label: 'PostgreSQL', color: '#336791' },
+  { label: 'MongoDB',    color: '#589636' },
+  { label: 'MySQL',      color: '#00758F' },
+  { label: 'Elastic',    color: '#FEC514' },
+  { label: 'REST API',   color: '#6366f1' },
+  { label: 'Amazon S3',  color: '#FF9900' },
+  { label: 'Files',      color: '#7c5cfc' },
+]
+
+function PipelineBanner({ totalNodes, totalEdges, hasData, setPage, onRefresh }) {
+  return (
+    <div className="bg-card border border-border rounded-2xl overflow-hidden">
+      <div className="flex items-stretch">
+        {/* Sources side */}
+        <div className="flex-1 p-5 space-y-3">
+          <div>
+            <p className="text-[13px] font-semibold text-slate-200">Multiple sources, one graph</p>
+            <p className="text-[12px] text-slate-500 mt-1 leading-relaxed">
+              Each connector ingests independently — ingest from any number of sources
+              and all data accumulates in the same knowledge graph.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {PIPE_SOURCES.map(({ label, color }) => (
+              <div key={label} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface border border-border text-[11px] text-slate-500">
+                <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
+                {label}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Arrow divider */}
+        <div className="flex items-center px-4 text-slate-700">
+          <ArrowRight size={18} />
+        </div>
+
+        {/* Graph side */}
+        <div className="w-44 flex-shrink-0 border-l border-border p-5 flex flex-col items-center justify-center gap-2 bg-surface/40">
+          <div
+            className="w-10 h-10 rounded-xl flex items-center justify-center text-[18px] font-black select-none"
+            style={{ background: 'linear-gradient(135deg,rgba(124,92,252,0.2),rgba(192,132,252,0.1))', border: '1px solid rgba(124,92,252,0.3)', color: '#9d7dff' }}
+          >◈</div>
+          {hasData ? (
+            <>
+              <div className="text-center">
+                <p className="text-[13px] font-bold text-slate-200">{totalNodes.toLocaleString()}</p>
+                <p className="text-[10px] text-slate-600">entities</p>
+              </div>
+              <div className="text-center">
+                <p className="text-[13px] font-bold text-slate-200">{totalEdges.toLocaleString()}</p>
+                <p className="text-[10px] text-slate-600">relations</p>
+              </div>
+              <button
+                onClick={() => setPage('graph')}
+                className="mt-1 text-[11px] text-accent hover:text-accent-2 transition-colors font-medium"
+              >
+                View graph →
+              </button>
+            </>
+          ) : (
+            <div className="text-center">
+              <p className="text-[12px] text-slate-600">Empty graph</p>
+              <p className="text-[10px] text-slate-700 mt-0.5">Ingest to populate</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -166,7 +268,7 @@ function SectionLabel({ children }) {
 const ACCEPTED        = '.txt,.md,.pdf,.docx,.csv,.json'
 const ACCEPTED_LABELS = ['TXT', 'MD', 'PDF', 'DOCX', 'CSV', 'JSON']
 
-function FileUploadCard({ apiUrl }) {
+function FileUploadCard({ apiUrl, onIngestDone }) {
   const [files, setFiles]       = useState([])
   const [dragging, setDragging] = useState(false)
   const [ingest, setIngest]     = useState(null)
@@ -197,6 +299,7 @@ function FileUploadCard({ apiUrl }) {
       const res = await fetch(`${apiUrl}/ingest/file`, { method: 'POST', body: form })
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail ?? `HTTP ${res.status}`) }
       await consumeSSE(res, setIngest, logRef)
+      onIngestDone?.()
     } catch (e) {
       setIngest(prev => ({ ...prev, done: true, error: e.message }))
     } finally { setBusy(false) }
@@ -206,7 +309,7 @@ function FileUploadCard({ apiUrl }) {
   const pct = ingest?.total > 0 ? Math.round(ingest.progress / ingest.total * 100) : 0
 
   return (
-    <div className="bg-card border border-border rounded-2xl overflow-hidden">
+    <div className="bg-card border border-border rounded-2xl overflow-hidden" style={{ borderTop: '2px solid rgba(124,92,252,0.2)' }}>
       <div className="px-6 py-5 space-y-4">
         <div
           onDragOver={e => { e.preventDefault(); setDragging(true) }}
@@ -263,7 +366,7 @@ function FileUploadCard({ apiUrl }) {
 
 // ── DB connector card ─────────────────────────────────────────────────────────
 
-function DbConnectorCard({ title, source, apiUrl, fields, config, setConfig, buildBody }) {
+function DbConnectorCard({ title, source, color = '#7c5cfc', apiUrl, fields, config, setConfig, buildBody, onIngestDone }) {
   const [testing,   setTesting]   = useState(false)
   const [testMsg,   setTestMsg]   = useState(null)
   const [ingesting, setIngesting] = useState(false)
@@ -294,6 +397,7 @@ function DbConnectorCard({ title, source, apiUrl, fields, config, setConfig, bui
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       await consumeSSE(res, setIngest, logRef)
+      onIngestDone?.()
     } catch (e) { setIngest(prev => ({ ...prev, done: true, error: e.message })) }
     finally { setIngesting(false) }
   }
@@ -302,17 +406,19 @@ function DbConnectorCard({ title, source, apiUrl, fields, config, setConfig, bui
   const pct  = ingest?.total > 0 ? Math.round(ingest.progress / ingest.total * 100) : 0
 
   return (
-    <div className="bg-card border border-border rounded-2xl overflow-hidden">
+    <div className="bg-card border border-border rounded-2xl overflow-hidden" style={{ borderTop: `2px solid ${color}22` }}>
       <button
-        className="w-full flex items-center gap-3 px-6 py-4 border-b border-border hover:bg-surface/30 transition-colors"
+        className="w-full flex items-center gap-3 px-5 py-4 hover:bg-white/3 transition-colors"
         onClick={() => setExpanded(e => !e)}
       >
+        <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color, boxShadow: `0 0 6px ${color}80` }} />
         <div className="flex-1 flex items-center gap-3 min-w-0">
-          <h2 className="text-[15px] font-semibold text-slate-100">{title}</h2>
-          <span className="text-[10px] font-mono bg-surface border border-border text-slate-600 px-2 py-0.5 rounded-md">{source}</span>
+          <h2 className="text-[14px] font-semibold text-slate-200">{title}</h2>
+          <span className="text-[10px] font-mono bg-surface border border-border text-slate-600 px-1.5 py-0.5 rounded">{source}</span>
         </div>
-        {expanded ? <ChevronUp size={14} className="text-slate-600" /> : <ChevronDown size={14} className="text-slate-600" />}
+        {expanded ? <ChevronUp size={13} className="text-slate-600" /> : <ChevronDown size={13} className="text-slate-600" />}
       </button>
+      {expanded && <div className="h-px mx-5 bg-border" />}
 
       {expanded && (
         <div className="px-6 py-5 space-y-4">
@@ -362,7 +468,7 @@ function DbConnectorCard({ title, source, apiUrl, fields, config, setConfig, bui
 
 // ── REST API connector card ───────────────────────────────────────────────────
 
-function RestConnectorCard({ apiUrl, config, setConfig }) {
+function RestConnectorCard({ apiUrl, config, setConfig, onIngestDone }) {
   const [testing,   setTesting]   = useState(false)
   const [testMsg,   setTestMsg]   = useState(null)
   const [ingesting, setIngesting] = useState(false)
@@ -397,6 +503,7 @@ function RestConnectorCard({ apiUrl, config, setConfig }) {
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       await consumeSSE(res, setIngest, logRef)
+      onIngestDone?.()
     } catch (e) { setIngest(prev => ({ ...prev, done: true, error: e.message })) }
     finally { setIngesting(false) }
   }
@@ -404,18 +511,21 @@ function RestConnectorCard({ apiUrl, config, setConfig }) {
   const busy = testing || ingesting
   const pct  = ingest?.total > 0 ? Math.round(ingest.progress / ingest.total * 100) : 0
 
+  const restColor = '#6366f1'
   return (
-    <div className="bg-card border border-border rounded-2xl overflow-hidden">
+    <div className="bg-card border border-border rounded-2xl overflow-hidden" style={{ borderTop: `2px solid ${restColor}22` }}>
       <button
-        className="w-full flex items-center gap-3 px-6 py-4 border-b border-border hover:bg-surface/30 transition-colors"
+        className="w-full flex items-center gap-3 px-5 py-4 hover:bg-white/3 transition-colors"
         onClick={() => setExpanded(e => !e)}
       >
+        <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: restColor, boxShadow: `0 0 6px ${restColor}80` }} />
         <div className="flex-1 flex items-center gap-3 min-w-0">
-          <h2 className="text-[15px] font-semibold text-slate-100">REST API</h2>
-          <span className="text-[10px] font-mono bg-surface border border-border text-slate-600 px-2 py-0.5 rounded-md">rest</span>
+          <h2 className="text-[14px] font-semibold text-slate-200">REST API</h2>
+          <span className="text-[10px] font-mono bg-surface border border-border text-slate-600 px-1.5 py-0.5 rounded">rest</span>
         </div>
-        {expanded ? <ChevronUp size={14} className="text-slate-600" /> : <ChevronDown size={14} className="text-slate-600" />}
+        {expanded ? <ChevronUp size={13} className="text-slate-600" /> : <ChevronDown size={13} className="text-slate-600" />}
       </button>
+      {expanded && <div className="h-px mx-5 bg-border" />}
 
       {expanded && (
         <div className="px-6 py-5 space-y-4">
@@ -477,7 +587,7 @@ function RestConnectorCard({ apiUrl, config, setConfig }) {
 
 // ── S3 connector card ─────────────────────────────────────────────────────────
 
-function S3ConnectorCard({ apiUrl, config, setConfig }) {
+function S3ConnectorCard({ apiUrl, config, setConfig, onIngestDone }) {
   const [testing,   setTesting]   = useState(false)
   const [testMsg,   setTestMsg]   = useState(null)
   const [ingesting, setIngesting] = useState(false)
@@ -508,6 +618,7 @@ function S3ConnectorCard({ apiUrl, config, setConfig }) {
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       await consumeSSE(res, setIngest, logRef)
+      onIngestDone?.()
     } catch (e) { setIngest(prev => ({ ...prev, done: true, error: e.message })) }
     finally { setIngesting(false) }
   }
@@ -522,18 +633,21 @@ function S3ConnectorCard({ apiUrl, config, setConfig }) {
     { id: 'secret_key', label: 'Secret Key', placeholder: '••••', type: 'password' },
   ]
 
+  const s3Color = '#FF9900'
   return (
-    <div className="bg-card border border-border rounded-2xl overflow-hidden">
+    <div className="bg-card border border-border rounded-2xl overflow-hidden" style={{ borderTop: `2px solid ${s3Color}22` }}>
       <button
-        className="w-full flex items-center gap-3 px-6 py-4 border-b border-border hover:bg-surface/30 transition-colors"
+        className="w-full flex items-center gap-3 px-5 py-4 hover:bg-white/3 transition-colors"
         onClick={() => setExpanded(e => !e)}
       >
+        <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: s3Color, boxShadow: `0 0 6px ${s3Color}80` }} />
         <div className="flex-1 flex items-center gap-3 min-w-0">
-          <h2 className="text-[15px] font-semibold text-slate-100">Amazon S3</h2>
-          <span className="text-[10px] font-mono bg-surface border border-border text-slate-600 px-2 py-0.5 rounded-md">s3</span>
+          <h2 className="text-[14px] font-semibold text-slate-200">Amazon S3</h2>
+          <span className="text-[10px] font-mono bg-surface border border-border text-slate-600 px-1.5 py-0.5 rounded">s3</span>
         </div>
-        {expanded ? <ChevronUp size={14} className="text-slate-600" /> : <ChevronDown size={14} className="text-slate-600" />}
+        {expanded ? <ChevronUp size={13} className="text-slate-600" /> : <ChevronDown size={13} className="text-slate-600" />}
       </button>
+      {expanded && <div className="h-px mx-5 bg-border" />}
 
       {expanded && (
         <div className="px-6 py-5 space-y-4">

@@ -173,14 +173,17 @@ export default function GraphPage({ apiUrl }) {
       <aside className="w-56 flex-shrink-0 flex flex-col border-r border-border bg-surface overflow-y-auto">
 
         {/* Controls */}
-        <div className="p-4 border-b border-border space-y-3">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Load</p>
+        <div className="p-4 space-y-3">
+          <div className="flex items-center gap-2 mb-1">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Controls</p>
+            <div className="flex-1 h-px bg-border" />
+          </div>
           <div>
             <label className="text-[11px] text-slate-500 block mb-1">Max nodes</label>
             <input
               type="number" value={limit} min={10} max={2000}
               onChange={e => setLimit(Number(e.target.value))}
-              className="w-full bg-card border border-border rounded-lg px-2.5 py-1.5 text-xs text-slate-300 outline-none focus:border-accent/40"
+              className="w-full bg-card border border-border rounded-lg px-2.5 py-1.5 text-xs text-slate-300 outline-none focus:border-accent/40 transition-colors"
             />
           </div>
           <div>
@@ -190,7 +193,7 @@ export default function GraphPage({ apiUrl }) {
               <input
                 type="text" value={search} placeholder="Filter by name…"
                 onChange={e => setSearch(e.target.value)}
-                className="w-full bg-card border border-border rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-slate-300 outline-none focus:border-accent/40"
+                className="w-full bg-card border border-border rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-slate-300 outline-none focus:border-accent/40 transition-colors"
               />
             </div>
           </div>
@@ -202,26 +205,34 @@ export default function GraphPage({ apiUrl }) {
             {loading ? 'Loading…' : loaded ? 'Reload' : 'Load Graph'}
           </button>
         </div>
+        <div className="h-px mx-4 bg-border" />
 
         {/* Stats */}
         {stats && (
-          <div className="p-4 border-b border-border">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600 mb-2">Stats</p>
-            <div className="space-y-1">
+          <div className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Stats</p>
+              <div className="flex-1 h-px bg-border" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
               {[['Nodes', stats.nodes], ['Edges', stats.edges]].map(([k, v]) => (
-                <div key={k} className="flex justify-between text-xs">
-                  <span className="text-slate-600">{k}</span>
-                  <span className="text-slate-300 font-medium">{v}</span>
+                <div key={k} className="bg-card rounded-lg px-3 py-2 text-center">
+                  <p className="text-sm font-bold text-slate-200">{v}</p>
+                  <p className="text-[10px] text-slate-600 mt-0.5">{k}</p>
                 </div>
               ))}
             </div>
           </div>
         )}
+        {stats && <div className="h-px mx-4 bg-border" />}
 
         {/* Type filter */}
         {types.length > 0 && (
-          <div className="p-4 border-b border-border">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600 mb-2">Entity types</p>
+          <div className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Entity types</p>
+              <div className="flex-1 h-px bg-border" />
+            </div>
             <div className="space-y-2">
               {types.map(t => (
                 <button
@@ -244,8 +255,11 @@ export default function GraphPage({ apiUrl }) {
         {/* Selected node */}
         {selected && (
           <div className="p-4">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Selected</p>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Selected</p>
+                <div className="flex-1 h-px bg-border w-8" />
+              </div>
               <button onClick={clearSelection} className="text-slate-700 hover:text-slate-500 transition-colors">
                 <X size={12} />
               </button>
