@@ -130,6 +130,29 @@ class Chatbot:
             {"t":"token", "content":"..."}
             {"t":"done"}
         """
+        if _is_entity_inventory_query(query):
+            inventory = self._retriever.entity_inventory(limit=40)
+            answer = _format_entity_inventory(inventory)
+
+            if debug:
+                yield _sse({
+                    "t": "step",
+                    "step": "graph_inventory",
+                    "label": "Graph Inventory",
+                    "detail": {
+                        "total_entities": inventory["total"],
+                        "entity_types": len(inventory["by_type"]),
+                        "sample_entities": len(inventory["entities"]),
+                    },
+                    "types": inventory["by_type"],
+                    "entities": inventory["entities"],
+                })
+                yield _sse({"t": "token", "content": answer})
+                yield _sse({"t": "done"})
+            else:
+                yield answer
+            return
+
         result   = self._retriever.retrieve(query)
         messages = self._build_messages(query, result)
 
@@ -264,6 +287,52 @@ class Chatbot:
 
 
 # ── formatters ────────────────────────────────────────────────────────────────
+
+def _is_entity_inventory_query(query: str) -> bool:
+    """Detect direct graph inventory questions that should bypass RAG search."""
+    q = " ".join(query.lower().split())
+    if "entity" not in q and "entities" not in q:
+        return False
+    inventory_phrases = (
+        "what entities",
+        "which entities",
+        "list entities",
+        "list the entities",
+        "show entities",
+        "show me entities",
+        "entities are in",
+        "entities in the knowledge graph",
+    )
+    return any(phrase in q for phrase in inventory_phrases)
+
+
+def _format_entity_inventory(inventory: dict) -> str:
+    """Render graph entity inventory without an LLM round trip."""
+    total = inventory.get("total", 0)
+    by_type = inventory.get("by_type", [])
+    entities = inventory.get("entities", [])
+
+    if not total:
+        return "There are no entities in the knowledge graph yet."
+
+    lines = [f"The knowledge graph currently contains {total} entities."]
+    if by_type:
+        top_types = ", ".join(
+            f"{item['type']} ({item['count']})"
+            for item in by_type[:10]
+        )
+        lines.append(f"Top entity types: {top_types}.")
+
+    if entities:
+        lines.append("")
+        lines.append("Sample entities:")
+        for entity in entities[:20]:
+            lines.append(f"- {entity['name']} ({entity['type']})")
+        if len(entities) > 20:
+            lines.append(f"- ...and {len(entities) - 20} more in this sample.")
+
+    return "\n".join(lines)
+
 
 def _format_passages(chunks) -> str:
     if not chunks:

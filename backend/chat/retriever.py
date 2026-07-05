@@ -172,6 +172,10 @@ class Retriever:
             subgraph_edges = subgraph_edges,
         )
 
+    def entity_inventory(self, limit: int = 50) -> dict:
+        """Return a direct Entity inventory from the graph store."""
+        return self._graph.list_entities(limit=limit)
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

@@ -99,6 +99,15 @@ class GraphDBPlugin(ABC):
         """
 
     @abstractmethod
+    def list_entities(self, limit: int = 50) -> dict[str, Any]:
+        """
+        Return a lightweight inventory of Entity nodes.
+
+        Used for direct graph-summary questions that should not depend on
+        semantic chunk retrieval, such as "what entities are in the graph?"
+        """
+
+    @abstractmethod
     def fuzzy_match_entities(
         self,
         embedding: list[float],

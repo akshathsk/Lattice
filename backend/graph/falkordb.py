@@ -127,6 +127,37 @@ class FalkorDBPlugin(GraphDBPlugin):
         rel_types = sorted(self._redis.smembers(_SCHEMA_RELS_KEY))
         return {"labels": labels, "rel_types": rel_types}
 
+    def list_entities(self, limit: int = 50) -> dict[str, Any]:
+        """Return total entity count, counts by type, and a sample list."""
+        total_res = self._graph.query("MATCH (e:Entity) RETURN count(e)")
+        types_res = self._graph.query(
+            """
+            MATCH (e:Entity)
+            RETURN e.type, count(e) AS cnt
+            ORDER BY cnt DESC, e.type ASC
+            """
+        )
+        sample_res = self._graph.query(
+            """
+            MATCH (e:Entity)
+            RETURN e.id, e.name, e.type
+            ORDER BY e.type ASC, e.name ASC
+            LIMIT $limit
+            """,
+            {"limit": limit},
+        )
+        return {
+            "total": total_res.result_set[0][0] if total_res.result_set else 0,
+            "by_type": [
+                {"type": row[0] or "Unknown", "count": row[1]}
+                for row in types_res.result_set
+            ],
+            "entities": [
+                {"id": row[0], "name": row[1], "type": row[2] or "Unknown"}
+                for row in sample_res.result_set
+            ],
+        }
+
     def _register_label(self, label: str) -> None:
         self._redis.sadd(_SCHEMA_LABELS_KEY, label)
 
