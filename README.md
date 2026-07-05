@@ -37,15 +37,58 @@ The graph schema emerges from the data — nothing is seeded at startup.
 
 ## Run
 
+### Prerequisites
+- **Docker Desktop** — must be running before step 1
+- **OpenAI API key** — set in `backend/.env` (see below)
+- **Node.js** — for the frontend
+
+### 1. Environment variables
+
+Create `backend/.env`:
+
+```env
+OPENAI_API_KEY=sk-...
+
+FALKORDB_HOST=localhost
+FALKORDB_PORT=6379
+
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=contracts
+POSTGRES_USER=lattice
+POSTGRES_PASSWORD=lattice123
+
+MONGO_HOST=localhost
+MONGO_PORT=27017
+MONGO_DB=contracts_docs
+```
+
+### 2. Start the databases
+
 ```bash
-# 1. Start FalkorDB + Postgres + Mongo
-docker compose up -d
+# Start FalkorDB, Postgres, and MongoDB containers
+docker start falkordb lattice-postgres lattice-mongo
 
-# 2. Start the API
-cd backend && python3 -m uvicorn main:app --reload
+# First time only — bring them up from the compose file
+# docker compose -f FalkorDB/build/docker/docker-compose.yml up -d
+```
 
-# 3. Start the React UI  (http://localhost:3000)
-cd frontend && npm install && npm run dev
+### 3. Start the backend
+
+```bash
+cd backend
+/opt/homebrew/bin/uvicorn main:app --reload --port 8000
+```
+
+> The backend uses the Homebrew Python 3.13 install (which has all dependencies).
+> Health check: http://localhost:8000/health
+
+### 4. Start the frontend
+
+```bash
+cd frontend
+npm install        # first time only
+npm run dev        # → http://localhost:3000
 ```
 
 ### Build for production
